@@ -31,11 +31,11 @@ Todo: Tu można bylo by dodać cały opis zakładania federacji.
     ```
 1. Po wykonaniu wcześniejszych kroków możesz wykonywać polecenia:
     ```ps
-    terraform plan
+    terraform plan -var "app_slug=todo-list" -var "aws_region=eu-central-1"
 
-    terraform apply
+    terraform apply -var "app_slug=todo-list" -var "aws_region=eu-central-1"
 
-    terraform destroy
+    terraform destroy -var "app_slug=todo-list" -var "aws_region=eu-central-1"
     ```
 
 ### 1.1.2. Jeśli generujesz klucze CLI
