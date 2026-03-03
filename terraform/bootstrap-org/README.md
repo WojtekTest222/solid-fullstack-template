@@ -48,8 +48,9 @@ Todo: Tu można bylo by dodać cały opis zakładania federacji.
     - Nie przełączaj istniejącego state między `safe` i `debug`; do innego trybu użyj nowego workspace/state.
     - `debug_suffix` (np. `dbg01`) dodaje suffix do nazwy i emaila konta, co ułatwia wielokrotne testowe uruchomienia.
 1. Root email dla kont jest generowany z aliasem `+`, np.:
-    - `mateusz+todo-list-logging@outlook.com`
-    - `mateusz+todo-list-prod@outlook.com`
+    - `mateusz+aws-todo-list-logging@outlook.com`
+    - `mateusz+aws-todo-list-prod@outlook.com`
+    - Gdy `app_slug` już kończy się na `-<debug_suffix>`, suffix nie jest dopinany drugi raz do nazwy konta i emaila.
 
 ### 1.1.2. Jeśli generujesz klucze CLI
 
