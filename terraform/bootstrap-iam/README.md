@@ -23,6 +23,11 @@ Na tym etapie dodany jest szkielet stacka. Kolejnym krokiem bedzie implementacja
     ```ps
     Copy-Item terraform.tfvars.example terraform.tfvars
     ```
+1. Uzupełnij wymagane zmienne w `terraform.tfvars`:
+    - `app_slug`
+    - `github_org`
+    - `github_repo`
+    - `target_account_ids` (każde ID musi mieć 12 cyfr)
 1. Uruchom Terraform:
     ```ps
     terraform init
