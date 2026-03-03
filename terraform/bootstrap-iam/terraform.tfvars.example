@@ -1,0 +1,17 @@
+aws_region = "eu-central-1"
+app_slug   = "todo-list"
+
+target_account_ids = {
+  logging = "111111111111"
+  prod    = "222222222222"
+  dev     = "333333333333"
+  preview = "444444444444"
+}
+
+organization_account_access_role_name = "OrganizationAccountAccessRole"
+github_org                            = "<GITHUB_ORG>"
+github_repo                           = "<GITHUB_REPO>"
+
+tags = {
+  Environment = "bootstrap-iam"
+}
