@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "global_rules": {
+    "prod_required": true,
+    "preview_requires_dev": true,
+    "shared_required_if_non_prod_exists": true,
+    "logging_required_if_stage_or_test": true
+  },
+  "presets": {
+    "minimal": {
+      "description": "Production-only setup for the smallest footprint.",
+      "aws_accounts": ["prod"],
+      "repo_branches": ["main"],
+      "default_branch": "main",
+      "enable_preview_pr": false
+    },
+    "dev-lite": {
+      "description": "Adds dev account and shared services, without PR preview.",
+      "aws_accounts": ["prod", "dev", "shared"],
+      "repo_branches": ["main", "dev"],
+      "default_branch": "dev",
+      "enable_preview_pr": false
+    },
+    "dev-standard": {
+      "description": "Recommended default for app teams using preview environments.",
+      "aws_accounts": ["prod", "dev", "preview", "shared"],
+      "repo_branches": ["main", "dev"],
+      "default_branch": "dev",
+      "enable_preview_pr": true
+    },
+    "release": {
+      "description": "Adds stage and logging for stronger release governance.",
+      "aws_accounts": ["prod", "dev", "stage", "preview", "shared", "logging"],
+      "repo_branches": ["main", "dev", "stage"],
+      "default_branch": "dev",
+      "enable_preview_pr": true
+    },
+    "full-qa": {
+      "description": "Full setup with dedicated test lane and centralized logging.",
+      "aws_accounts": ["prod", "dev", "stage", "test", "preview", "shared", "logging"],
+      "repo_branches": ["main", "dev", "stage", "test"],
+      "default_branch": "dev",
+      "enable_preview_pr": true
+    }
+  }
+}
