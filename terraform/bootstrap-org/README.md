@@ -55,3 +55,30 @@ Todo: Tu można bylo by dodać cały opis zakładania federacji.
 ### 1.1.2. Jeśli generujesz klucze CLI
 
 Todo: uzupełnić tą sekcję.
+
+## 1.2. Presety dla workflow `bootstrap-org.yml`
+
+Workflow ma input `preset` typu `choice`. GitHub nie wspiera opisu per opcja w UI, dlatego legenda jest tutaj:
+
+1. `minimal`
+    - Konta: `prod`
+    - Branche repo: `main`
+    - Preview PR: `false`
+1. `dev-lite`
+    - Konta: `prod`, `dev`, `shared`
+    - Branche repo: `main`, `dev`
+    - Preview PR: `false`
+1. `dev-standard` (domyślny)
+    - Konta: `prod`, `dev`, `preview`, `shared`
+    - Branche repo: `main`, `dev`
+    - Preview PR: `true`
+1. `release`
+    - Konta: `prod`, `dev`, `stage`, `preview`, `shared`, `logging`
+    - Branche repo: `main`, `dev`, `stage`
+    - Preview PR: `true`
+1. `full-qa`
+    - Konta: `prod`, `dev`, `stage`, `test`, `preview`, `shared`, `logging`
+    - Branche repo: `main`, `dev`, `stage`, `test`
+    - Preview PR: `true`
+
+Źródło prawdy presetów: `config/presets.json`.

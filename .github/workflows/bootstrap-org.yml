@@ -29,11 +29,17 @@ on:
                 required: false
                 type: string
                 default: "NO"
-            environment_accounts:
-                description: "Comma-separated account list, e.g. logging,prod,dev,preview"
-                required: false
-                type: string
-                default: "logging,prod,dev,preview"
+            preset:
+                description: "Bootstrap preset from config/presets.json"
+                required: true
+                type: choice
+                options:
+                    - minimal
+                    - dev-lite
+                    - dev-standard
+                    - release
+                    - full-qa
+                default: dev-standard
             action:
                 description: "Run plan only or plan+apply"
                 required: true
@@ -55,6 +61,18 @@ permissions:
 jobs:
     bootstrap-org:
         runs-on: ubuntu-latest
+        # Job outputs form a machine-readable contract for downstream automation.
+        outputs:
+            preset: ${{ steps.tfvars.outputs.preset }}
+            accounts_json: ${{ steps.tfvars.outputs.accounts_json }}
+            repo_branches_json: ${{ steps.tfvars.outputs.repo_branches_json }}
+            default_branch: ${{ steps.tfvars.outputs.default_branch }}
+            enable_preview_pr: ${{ steps.tfvars.outputs.enable_preview_pr }}
+            account_ids_json: ${{ steps.tfout.outputs.account_ids_json }}
+            account_arns_json: ${{ steps.tfout.outputs.account_arns_json }}
+            account_emails_json: ${{ steps.tfout.outputs.account_emails_json }}
+            ou_id: ${{ steps.tfout.outputs.ou_id }}
+            ou_arn: ${{ steps.tfout.outputs.ou_arn }}
 
         steps:
             - name: Checkout
@@ -147,33 +165,42 @@ jobs:
             - name: Setup Terraform
               uses: hashicorp/setup-terraform@v3
 
+            - name: Validate preset contract
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  python scripts/validate-presets.py
+
             - name: Build runtime tfvars
               id: tfvars
               shell: bash
               env:
+                  PRESET: ${{ inputs.preset }}
                   APP_SLUG: ${{ inputs.app_slug }}
                   ROOT_EMAIL_BASE: ${{ inputs.root_email_base }}
                   BOOTSTRAP_MODE: ${{ inputs.bootstrap_mode }}
                   DEBUG_SUFFIX: ${{ inputs.debug_suffix }}
-                  ENVIRONMENT_ACCOUNTS: ${{ inputs.environment_accounts }}
                   AWS_REGION: ${{ steps.cfg.outputs.aws_region }}
               run: |
                   set -euo pipefail
 
-                  mapfile -t ACCOUNTS < <(
-                    echo "$ENVIRONMENT_ACCOUNTS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' | awk 'NF'
-                  )
+                  # Resolve the selected preset into Terraform inputs and repo metadata.
+                  PRESETS_FILE="config/presets.json"
 
-                  if [[ ${#ACCOUNTS[@]} -eq 0 ]]; then
-                    echo "::error::environment_accounts input produced an empty list."
+                  if [[ ! -f "$PRESETS_FILE" ]]; then
+                    echo "::error::Missing $PRESETS_FILE."
                     exit 1
                   fi
 
-                  ACCOUNTS_HCL="["
-                  for item in "${ACCOUNTS[@]}"; do
-                    ACCOUNTS_HCL="${ACCOUNTS_HCL}\"${item}\", "
-                  done
-                  ACCOUNTS_HCL="${ACCOUNTS_HCL%, }]"
+                  if ! jq -e --arg preset "$PRESET" '.presets[$preset]' "$PRESETS_FILE" >/dev/null; then
+                    echo "::error::Unknown preset '$PRESET'."
+                    exit 1
+                  fi
+
+                  ACCOUNTS_HCL="$(jq -c --arg preset "$PRESET" '.presets[$preset].aws_accounts' "$PRESETS_FILE")"
+                  BRANCHES_JSON="$(jq -c --arg preset "$PRESET" '.presets[$preset].repo_branches' "$PRESETS_FILE")"
+                  DEFAULT_BRANCH="$(jq -r --arg preset "$PRESET" '.presets[$preset].default_branch' "$PRESETS_FILE")"
+                  ENABLE_PREVIEW_PR="$(jq -r --arg preset "$PRESET" '.presets[$preset].enable_preview_pr' "$PRESETS_FILE")"
 
                   TFVARS_PATH="$RUNNER_TEMP/bootstrap-org.tfvars"
                   cat > "$TFVARS_PATH" <<EOF
@@ -191,6 +218,11 @@ jobs:
 
                   echo "tfvars_path=${TFVARS_PATH}" >> "$GITHUB_OUTPUT"
                   echo "accounts_hcl=${ACCOUNTS_HCL}" >> "$GITHUB_OUTPUT"
+                  echo "accounts_json=${ACCOUNTS_HCL}" >> "$GITHUB_OUTPUT"
+                  echo "repo_branches_json=${BRANCHES_JSON}" >> "$GITHUB_OUTPUT"
+                  echo "default_branch=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+                  echo "enable_preview_pr=${ENABLE_PREVIEW_PR}" >> "$GITHUB_OUTPUT"
+                  echo "preset=${PRESET}" >> "$GITHUB_OUTPUT"
 
             - name: Print destroy helper command
               shell: bash
@@ -260,9 +292,60 @@ jobs:
                   set -euo pipefail
                   terraform -chdir=terraform/bootstrap-org apply -auto-approve "$RUNNER_TEMP/bootstrap-org.tfplan"
 
-            - name: Terraform outputs
+            - name: Terraform outputs (human-readable)
               if: ${{ inputs.action == 'apply' }}
               shell: bash
               run: |
                   set -euo pipefail
                   terraform -chdir=terraform/bootstrap-org output
+
+            - name: Terraform outputs (JSON)
+              if: ${{ inputs.action == 'apply' }}
+              id: tfout
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  # Read structured outputs from state and expose them via GITHUB_OUTPUT.
+                  ACCOUNT_IDS_JSON="$(terraform -chdir=terraform/bootstrap-org output -json account_ids | jq -c .)"
+                  ACCOUNT_ARNS_JSON="$(terraform -chdir=terraform/bootstrap-org output -json account_arns | jq -c .)"
+                  ACCOUNT_EMAILS_JSON="$(terraform -chdir=terraform/bootstrap-org output -json account_emails | jq -c .)"
+                  OU_ID="$(terraform -chdir=terraform/bootstrap-org output -raw ou_id)"
+                  OU_ARN="$(terraform -chdir=terraform/bootstrap-org output -raw ou_arn)"
+
+                  echo "account_ids_json=${ACCOUNT_IDS_JSON}" >> "$GITHUB_OUTPUT"
+                  echo "account_arns_json=${ACCOUNT_ARNS_JSON}" >> "$GITHUB_OUTPUT"
+                  echo "account_emails_json=${ACCOUNT_EMAILS_JSON}" >> "$GITHUB_OUTPUT"
+                  echo "ou_id=${OU_ID}" >> "$GITHUB_OUTPUT"
+                  echo "ou_arn=${OU_ARN}" >> "$GITHUB_OUTPUT"
+
+            - name: Print standardized JSON payload
+              if: ${{ inputs.action == 'apply' }}
+              shell: bash
+              env:
+                  PRESET: ${{ steps.tfvars.outputs.preset }}
+                  ACCOUNT_IDS_JSON: ${{ steps.tfout.outputs.account_ids_json }}
+                  ACCOUNT_ARNS_JSON: ${{ steps.tfout.outputs.account_arns_json }}
+                  ACCOUNT_EMAILS_JSON: ${{ steps.tfout.outputs.account_emails_json }}
+                  OU_ID: ${{ steps.tfout.outputs.ou_id }}
+                  OU_ARN: ${{ steps.tfout.outputs.ou_arn }}
+              run: |
+                  set -euo pipefail
+
+                  # Emit one normalized JSON document for logs/debugging and future parsers.
+                  jq -n \
+                    --arg preset "$PRESET" \
+                    --arg ou_id "$OU_ID" \
+                    --arg ou_arn "$OU_ARN" \
+                    --argjson account_ids "$ACCOUNT_IDS_JSON" \
+                    --argjson account_arns "$ACCOUNT_ARNS_JSON" \
+                    --argjson account_emails "$ACCOUNT_EMAILS_JSON" \
+                    '{
+                      preset: $preset,
+                      ou: { id: $ou_id, arn: $ou_arn },
+                      accounts: {
+                        ids: $account_ids,
+                        arns: $account_arns,
+                        emails: $account_emails
+                      }
+                    }'
