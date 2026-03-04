@@ -60,6 +60,30 @@ variable "github_repo" {
   }
 }
 
+variable "github_oidc_thumbprints" {
+  description = "Thumbprints used when creating GitHub OIDC provider."
+  type        = list(string)
+  default     = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+variable "github_oidc_audience" {
+  description = "OIDC audience expected from GitHub token."
+  type        = string
+  default     = "sts.amazonaws.com"
+}
+
+variable "github_subject_patterns" {
+  description = "Optional list of sub claim patterns; defaults to environment-scoped repo pattern."
+  type        = list(string)
+  default     = []
+}
+
+variable "iam_managed_policy_arns" {
+  description = "Managed policy ARNs attached to created GitHub OIDC role."
+  type        = list(string)
+  default     = ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+}
+
 variable "tags" {
   description = "Additional tags added to resources created by bootstrap-iam."
   type        = map(string)
