@@ -109,6 +109,16 @@ data "aws_iam_policy_document" "github_actions_bootstrap_permissions" {
     ]
     resources = [aws_dynamodb_table.tf_lock.arn]
   }
+
+  statement {
+    sid = "AssumeOrganizationAccountAccessRole"
+    actions = [
+      "sts:AssumeRole",
+    ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:iam::*:role/${var.organization_account_access_role_name}",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "github_actions_bootstrap_permissions" {

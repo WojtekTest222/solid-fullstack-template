@@ -32,6 +32,12 @@ variable "github_oidc_role_name" {
   default     = "gha-bootstrap-org"
 }
 
+variable "organization_account_access_role_name" {
+  description = "Member-account role name assumed by bootstrap workflows (created by AWS Organizations)."
+  type        = string
+  default     = "OrganizationAccountAccessRole"
+}
+
 variable "tf_state_bucket_name" {
   description = "S3 bucket name used for Terraform remote state."
   type        = string

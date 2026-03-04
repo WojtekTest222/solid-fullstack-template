@@ -3,6 +3,7 @@ github_org            = "<GITHUB_ORG>"
 # Optional. If empty, trust policy allows all repos in github_org.
 github_repo           = "<GITHUB_REPO>"
 github_oidc_role_name = "gha-bootstrap-org"
+organization_account_access_role_name = "OrganizationAccountAccessRole"
 # Optional. If non-empty, role access to state objects is limited to this prefix.
 tf_state_key_prefix   = "bootstrap-org"
 # Optional. If empty, defaults to tfstate-<ACCOUNT_ID>-<REGION>.

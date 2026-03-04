@@ -6,8 +6,8 @@ Tworzy role OIDC dla GitHub Actions (provider + role + attachment policy) w konc
 Docelowo ten stack bedzie uruchamiany w petli (matrix) dla kont wynikajacych z wybranego presetu.
 Nazwa tworzonej roli jest stala: `gha-environment-deploy`.
 Domyslny trust policy jest zawezony do GitHub Environment zgodnego z `environment_name`.
-
-Na tym etapie dodany jest szkielet stacka. Kolejnym krokiem bedzie implementacja zasobow IAM.
+Na tym etapie zasoby IAM sa juz zaimplementowane dla modelu single-account.
+Kolejne kroki to uruchamianie matrix/orchestrator oraz powiazanie outputow z konfiguracja GitHub Environments.
 
 ## 1.1. Uruchomienie lokalne (SSO)
 
