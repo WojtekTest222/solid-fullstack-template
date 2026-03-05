@@ -7,7 +7,7 @@ Docelowo ten stack bedzie uruchamiany w petli (matrix) dla kont wynikajacych z w
 Nazwa tworzonej roli jest stala: `gha-environment-deploy`.
 Domyslny trust policy jest zawezony do GitHub Environment zgodnego z `environment_name`.
 Na tym etapie zasoby IAM sa juz zaimplementowane dla modelu single-account.
-Kolejne kroki to uruchamianie matrix/orchestrator oraz powiazanie outputow z konfiguracja GitHub Environments.
+Kolejne kroki to uruchamianie matrix/orchestrator oraz dalszy hardening policy.
 
 ## 1.1. Uruchomienie lokalne (SSO)
 
@@ -33,12 +33,13 @@ Kolejne kroki to uruchamianie matrix/orchestrator oraz powiazanie outputow z kon
     - `target_account_id`
     - `github_org`
     - `github_repo`
-    - (opcjonalnie) `github_subject_patterns` gdy chcesz jawnie nadpisać domyślne wzorce `sub`
-    - `iam_managed_policy_arns` (lista policy przypinanych do roli OIDC)
 1. Uwaga dot. uprawnień roli:
-    - `iam_managed_policy_arns` jest obecnie mechanizmem przejściowym.
-    - Domyślnie przypinane jest `ReadOnlyAccess`, co zwykle nie wystarczy do pełnych deployów.
-    - Docelowy kierunek: policy-as-code w tym stacku (`aws_iam_policy_document` + `aws_iam_policy`) z minimalnym zakresem per środowisko.
+    - Docelowo i domyślnie stosowane jest policy-as-code (`aws_iam_policy_document` + `aws_iam_policy`) z profilem zaleznym od `environment_name`.
+    - Profile:
+      - `prod`: runtime/deploy bez pelnego `iam:*`
+      - `dev` i `preview`: najszerszy zakres (w tym `iam:*`) do szybkiej iteracji
+      - `shared`: zakres pod wspolne zasoby platformowe
+      - `logging`: zakres pod pipeline/logging stack
 1. Uruchom Terraform:
     ```ps
     terraform init
@@ -49,7 +50,7 @@ Kolejne kroki to uruchamianie matrix/orchestrator oraz powiazanie outputow z kon
 ## 1.2. Następny zakres implementacji
 
 1. Spiac workflow matrix z orchestratorem `bootstrap-all`, aby uruchamial sie automatycznie po `bootstrap-org`.
-1. Doprecyzować minimalne policy IAM per typ konta (`prod/dev/preview/shared/logging`).
+1. Dalszy hardening policy-as-code do faktycznie uzywanych serwisow runtime.
 
 ## 1.3. Workflow manualny
 

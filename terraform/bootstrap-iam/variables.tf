@@ -34,12 +34,6 @@ variable "target_account_id" {
   }
 }
 
-variable "organization_account_access_role_name" {
-  description = "Role name used to access member accounts after they are created by Organizations."
-  type        = string
-  default     = "OrganizationAccountAccessRole"
-}
-
 variable "github_org" {
   description = "GitHub organization name used later for trust policy scoping."
   type        = string
@@ -58,34 +52,4 @@ variable "github_repo" {
     condition     = can(regex("^[A-Za-z0-9._-]+$", var.github_repo)) && length(var.github_repo) <= 100
     error_message = "github_repo must contain only letters, digits, dot, underscore, or hyphen (max 100 chars)."
   }
-}
-
-variable "github_oidc_thumbprints" {
-  description = "Thumbprints used when creating GitHub OIDC provider."
-  type        = list(string)
-  default     = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-}
-
-variable "github_oidc_audience" {
-  description = "OIDC audience expected from GitHub token."
-  type        = string
-  default     = "sts.amazonaws.com"
-}
-
-variable "github_subject_patterns" {
-  description = "Optional list of sub claim patterns; defaults to environment-scoped repo pattern."
-  type        = list(string)
-  default     = []
-}
-
-variable "iam_managed_policy_arns" {
-  description = "Managed policy ARNs attached to created GitHub OIDC role."
-  type        = list(string)
-  default     = ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
-}
-
-variable "tags" {
-  description = "Additional tags added to resources created by bootstrap-iam."
-  type        = map(string)
-  default     = {}
 }

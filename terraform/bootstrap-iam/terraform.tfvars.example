@@ -3,15 +3,5 @@ app_slug   = "todo-list"
 environment_name = "dev"
 target_account_id = "222222222222"
 
-organization_account_access_role_name = "OrganizationAccountAccessRole"
 github_org                            = "<GITHUB_ORG>"
 github_repo                           = "<GITHUB_REPO>"
-# github_subject_patterns             = ["repo:<GITHUB_ORG>/<GITHUB_REPO>:environment:dev"]
-
-iam_managed_policy_arns = [
-  "arn:aws:iam::aws:policy/ReadOnlyAccess"
-]
-
-tags = {
-  Environment = "bootstrap-iam"
-}

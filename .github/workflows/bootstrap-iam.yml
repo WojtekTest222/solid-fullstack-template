@@ -137,10 +137,6 @@ jobs:
                   github_org        = "${GITHUB_ORG}"
                   github_repo       = "${GITHUB_REPO}"
                   aws_region        = "${AWS_REGION}"
-
-                  tags = {
-                    ManagedBy = "GitHubActions"
-                  }
                   EOF
 
                   echo "tfvars_path=${TFVARS_PATH}" >> "$GITHUB_OUTPUT"
@@ -177,9 +173,3 @@ jobs:
               run: |
                   set -euo pipefail
                   terraform -chdir=terraform/bootstrap-iam apply -auto-approve "$RUNNER_TEMP/bootstrap-iam.tfplan"
-
-            - name: Terraform outputs
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  terraform -chdir=terraform/bootstrap-iam output
