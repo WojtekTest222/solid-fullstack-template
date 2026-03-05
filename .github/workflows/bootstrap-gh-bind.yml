@@ -21,12 +21,15 @@ on:
                 required: false
                 type: string
                 default: ""
+        secrets:
+            GH_APP_ID:
+                required: true
+            GH_APP_PRIVATE_KEY:
+                required: true
 
 permissions:
     id-token: write
     contents: read
-    actions: write
-    deployments: write
 
 jobs:
     bootstrap-gh-bind:
@@ -44,6 +47,34 @@ jobs:
 
             - name: Checkout
               uses: actions/checkout@v4
+
+            - name: Validate GitHub App secrets
+              shell: bash
+              env:
+                  GH_APP_ID: ${{ secrets.GH_APP_ID }}
+                  GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+              run: |
+                  set -euo pipefail
+                  if [[ -z "${GH_APP_ID}" || -z "${GH_APP_PRIVATE_KEY}" ]]; then
+                    echo "::error::Missing required secrets GH_APP_ID or GH_APP_PRIVATE_KEY."
+                    exit 1
+                  fi
+
+            - name: Resolve repository name
+              id: repo
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+            - name: Create GitHub App installation token
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ secrets.GH_APP_ID }}
+                  private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+                  owner: ${{ github.repository_owner }}
+                  repositories: ${{ steps.repo.outputs.name }}
 
             - name: Resolve workflow configuration
               id: cfg
@@ -165,6 +196,7 @@ jobs:
                   ACCOUNT_IDS_JSON: ${{ steps.targets.outputs.account_ids_json }}
                   AWS_REGION: ${{ steps.cfg.outputs.aws_region }}
               with:
+                  github-token: ${{ steps.app-token.outputs.token }}
                   script: |
                       const accountIds = JSON.parse(process.env.ACCOUNT_IDS_JSON || "{}");
                       const [owner, repo] = process.env.GITHUB_REPOSITORY.split("/");
@@ -217,4 +249,3 @@ jobs:
                         .addHeading("bootstrap-gh-bind")
                         .addList(summary)
                         .write();
-
