@@ -23,6 +23,7 @@ on:
 permissions:
     contents: write
     deployments: write
+    administration: write
 
 jobs:
     bootstrap-gh-core:
