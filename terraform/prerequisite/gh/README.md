@@ -18,6 +18,9 @@ Minimalny zestaw (Repository permissions):
 - `Administration: Read & write`
 - `Contents: Read & write`
 - `Actions: Read & write`
+- `Environments: Read & write`
+
+Jesli appka zostala utworzona wczesniej bez `Environments: Read & write`, edytuj uprawnienia appki i zaakceptuj update instalacji w organizacji.
 
 ## 1.3. One-time setup
 

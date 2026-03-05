@@ -171,6 +171,7 @@ def build_manifest(args: argparse.Namespace, redirect_url: str) -> dict[str, Any
             "actions": "write",
             "contents": "write",
             "deployments": "write",
+            "environments": "write",
             "metadata": "read",
         },
         "default_events": [],
