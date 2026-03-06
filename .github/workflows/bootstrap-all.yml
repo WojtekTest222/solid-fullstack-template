@@ -1,0 +1,96 @@
+name: bootstrap-all
+
+on:
+    workflow_dispatch:
+        inputs:
+            app_slug:
+                description: "Application slug, e.g. todo-list"
+                required: true
+                type: string
+            root_email_base:
+                description: "Base root email without plus alias, e.g. owner@example.com"
+                required: true
+                type: string
+            bootstrap_mode:
+                description: "safe keeps prevent_destroy, debug enables account closing on destroy"
+                required: true
+                type: choice
+                options:
+                    - safe
+                    - debug
+                default: safe
+            debug_suffix:
+                description: "Optional suffix for debug runs, e.g. dbg01"
+                required: false
+                type: string
+                default: ""
+            preset:
+                description: "Bootstrap preset from config/presets.json"
+                required: true
+                type: choice
+                options:
+                    - minimal
+                    - dev-lite
+                    - dev-standard
+                    - release
+                    - full-qa
+                default: dev-standard
+            aws_region:
+                description: "Optional region override (defaults to AWS_REGION variable)"
+                required: false
+                type: string
+                default: ""
+
+permissions:
+    id-token: write
+    contents: write
+    deployments: write
+
+jobs:
+    guard:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Guard template source repository
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [[ "${GITHUB_REPOSITORY}" == "KnightRadiants/solid-fullstack-template" ]]; then
+                    echo "::error::This workflow is blocked on template source repository (KnightRadiants/solid-fullstack-template). Use a repository created from this template."
+                    exit 1
+                  fi
+
+    bootstrap-org:
+        needs: guard
+        uses: ./.github/workflows/bootstrap-org.yml
+        with:
+            app_slug: ${{ inputs.app_slug }}
+            root_email_base: ${{ inputs.root_email_base }}
+            bootstrap_mode: ${{ inputs.bootstrap_mode }}
+            debug_suffix: ${{ inputs.debug_suffix }}
+            debug_confirmation: ${{ inputs.bootstrap_mode == 'debug' && 'YES' || 'NO' }}
+            preset: ${{ inputs.preset }}
+            aws_region: ${{ inputs.aws_region }}
+        secrets: inherit
+
+    bootstrap-iam:
+        needs: bootstrap-org
+        uses: ./.github/workflows/bootstrap-iam-matrix.yml
+        with:
+            app_slug: ${{ inputs.app_slug }}
+            aws_region: ${{ inputs.aws_region }}
+        secrets: inherit
+
+    bootstrap-gh-core:
+        needs: bootstrap-iam
+        uses: ./.github/workflows/bootstrap-gh-core.yml
+        with:
+            preset: ${{ inputs.preset }}
+        secrets: inherit
+
+    bootstrap-gh-bind:
+        needs: bootstrap-gh-core
+        uses: ./.github/workflows/bootstrap-gh-bind.yml
+        with:
+            app_slug: ${{ inputs.app_slug }}
+            aws_region: ${{ inputs.aws_region }}
+        secrets: inherit

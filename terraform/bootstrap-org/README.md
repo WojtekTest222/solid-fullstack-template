@@ -1,84 +1,60 @@
-# 1. Bootstrap
+# bootstrap-org
 
-Po sklonowaniu repozytorium, musisz utworzyć odpowiedną strukturę na swoim koncie AWS.
-Wymagane jest połącznie z kontem AWS, które jest kontem Organization Managment Account.
+Tworzy OU i konta AWS Organizations dla aplikacji.
 
-## 1.1. Konfiguracja AWS-CLI
+Zalecane uruchomienie: przez `bootstrap-all`.
 
-### 1.1.1. Jeśli korzystasz z Identity Federation (zalecana metoda)
+## 1. Co tworzy
 
-Todo: Tu można bylo by dodać cały opis zakładania federacji.
+1. Organizational Unit: `APP-<APP_SLUG>`
+1. Konta z listy `environment_accounts` (w workflow wyliczane z `preset`)
+1. Outputy state:
+   - `ou_id`, `ou_arn`, `ou_name`
+   - `account_ids`, `account_arns`, `account_emails`
 
-1. Przejdź do katalogu bootstrap:
-    ```ps
-    Set-Location terraform/bootstrap-org
-    ```
-1. Ustaw profil:
-    ```ps
-    $env:AWS_PROFILE = "mafi-general-sso"
-    ```
-1. Skonfiguruj sso login:
-    ```ps
-    aws configure sso --profile $env:AWS_PROFILE
-    ```
-1. Zaloguj się:
-    ```ps
-    aws sso login --profile $env:AWS_PROFILE
-    ```
-1. Zobacz jako kto jesteś zalogowany:
-    ```ps
-    aws sts get-caller-identity --profile $env:AWS_PROFILE
-    ```
-1. Przygotuj plik zmiennych:
-    ```ps
-    Copy-Item terraform.tfvars.example terraform.tfvars
-    ```
-1. Po wykonaniu wcześniejszych kroków możesz wykonywać polecenia:
-    ```ps
-    terraform plan -var-file="terraform.tfvars"
+## 2. Tryby bootstrapu
 
-    terraform apply -var-file="terraform.tfvars"
+- `bootstrap_mode = "safe"`
+  - `prevent_destroy = true` na kontach
+  - `terraform destroy` nie zamknie kont
+- `bootstrap_mode = "debug"`
+  - brak `prevent_destroy`
+  - `close_on_deletion = true`
+  - `terraform destroy` moze zamknac konta (operacja asynchroniczna)
 
-    terraform destroy -var-file="terraform.tfvars"
-    ```
-1. Jak włączyć i wyłączyć tryb:
-    - `bootstrap_mode = "safe"`: konta mają `prevent_destroy = true`, więc `terraform destroy` nie zamknie kont.
-    - `bootstrap_mode = "debug"`: konta są tworzone bez `prevent_destroy` i z `close_on_deletion = true`, więc `terraform destroy` może je zamknąć.
-    - Używaj tego samego trybu dla `apply` i `destroy` w tym samym state.
-    - Nie przełączaj istniejącego state między `safe` i `debug`; do innego trybu użyj nowego workspace/state.
-    - `debug_suffix` (np. `dbg01`) dodaje suffix do nazwy i emaila konta, co ułatwia wielokrotne testowe uruchomienia.
-1. Root email dla kont jest generowany z aliasem `+`, np.:
-    - `mateusz+aws-todo-list-logging@outlook.com`
-    - `mateusz+aws-todo-list-prod@outlook.com`
-    - Gdy `app_slug` już kończy się na `-<debug_suffix>`, suffix nie jest dopinany drugi raz do nazwy konta i emaila.
+`debug_suffix` dodaje suffix do nazwy OU/kont i aliasu email.
 
-### 1.1.2. Jeśli generujesz klucze CLI
+## 3. Workflow inputs (bootstrap-org.yml)
 
-Todo: uzupełnić tą sekcję.
+- `app_slug`
+- `root_email_base`
+- `bootstrap_mode`
+- `debug_suffix` (opcjonalny)
+- `debug_confirmation` (`YES` wymagane dla `debug`)
+- `preset`
+- `aws_region` (opcjonalny override)
 
-## 1.2. Presety dla workflow `bootstrap-org.yml`
+Presety i ich kontrakt:
+- [config/README.md](../../config/README.md)
 
-Workflow ma input `preset` typu `choice`. GitHub nie wspiera opisu per opcja w UI, dlatego legenda jest tutaj:
+## 4. Lokalny run (fallback)
 
-1. `minimal`
-    - Konta: `prod`
-    - Branche repo: `main`
-    - Preview PR: `false`
-1. `dev-lite`
-    - Konta: `prod`, `dev`, `shared`
-    - Branche repo: `main`, `dev`
-    - Preview PR: `false`
-1. `dev-standard` (domyślny)
-    - Konta: `prod`, `dev`, `preview`, `shared`
-    - Branche repo: `main`, `dev`
-    - Preview PR: `true`
-1. `release`
-    - Konta: `prod`, `dev`, `stage`, `preview`, `shared`, `logging`
-    - Branche repo: `main`, `dev`, `stage`
-    - Preview PR: `true`
-1. `full-qa`
-    - Konta: `prod`, `dev`, `stage`, `test`, `preview`, `shared`, `logging`
-    - Branche repo: `main`, `dev`, `stage`, `test`
-    - Preview PR: `true`
-
-Źródło prawdy presetów: `config/presets.json`.
+1. Przejdz do katalogu:
+   ```ps
+   Set-Location terraform/bootstrap-org
+   ```
+1. Ustaw profil i login:
+   ```ps
+   $env:AWS_PROFILE = "mafi-general-sso"
+   aws sso login --profile $env:AWS_PROFILE
+   ```
+1. Przygotuj zmienne:
+   ```ps
+   Copy-Item terraform.tfvars.example terraform.tfvars
+   ```
+1. Uruchom:
+   ```ps
+   terraform init
+   terraform plan -var-file="terraform.tfvars"
+   terraform apply -var-file="terraform.tfvars"
+   ```

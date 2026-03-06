@@ -17,6 +17,19 @@ on:
                 required: false
                 type: string
                 default: ""
+    workflow_call:
+        inputs:
+            app_slug:
+                required: true
+                type: string
+            environments:
+                required: false
+                type: string
+                default: ""
+            aws_region:
+                required: false
+                type: string
+                default: ""
 
 permissions:
     id-token: write

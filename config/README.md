@@ -1,24 +1,25 @@
-# Preset Contract
+# Preset contract
 
-`presets.json` is the single source of truth for bootstrap presets.
+`config/presets.json` to zrodlo prawdy dla wariantow bootstrapu.
 
-Each preset defines:
-- `aws_accounts`: accounts that should be created/configured for the app
-- `repo_branches`: branches that should exist in the app repository
-- `default_branch`: repository default branch
-- `enable_preview_pr`: whether preview-per-PR flow should be enabled
+Kazdy preset definiuje:
+- `aws_accounts` - jakie konta tworzy `bootstrap-org`
+- `repo_branches` - jakie branche tworzy `bootstrap-gh-core`
+- `default_branch` - jaka galaz ustawia `bootstrap-gh-core`
+- `enable_preview_pr` - flaga pod dalsze workflow CI/CD
 
-Consumers:
-- `bootstrap-org.yml`: uses `aws_accounts` to create OU member accounts
-- `bootstrap-gh-core.yml`: uses `repo_branches`, `default_branch`, and `aws_accounts` (as GitHub Environments)
+Konsumenci presetow:
+- `bootstrap-org.yml`
+- `bootstrap-gh-core.yml`
+- `bootstrap-all.yml` (przekazuje preset dalej)
 
-Current global rules:
-- `prod` is always required.
-- `preview` requires `dev`.
-- `shared` is required when any account beyond `prod` is enabled.
-- `logging` is required when `stage` or `test` is enabled.
+Globalne reguly walidacji:
+- `prod` jest zawsze wymagany
+- `preview` wymaga `dev`
+- `shared` jest wymagany, gdy istnieje jakiekolwiek konto poza `prod`
+- `logging` jest wymagany, gdy istnieje `stage` lub `test`
 
-Validate contract:
+Walidacja kontraktu:
 
 ```ps
 python scripts/validate-presets.py

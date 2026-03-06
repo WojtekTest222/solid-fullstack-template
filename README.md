@@ -1,45 +1,51 @@
 # solid-fullstack-template
 
-## Bootstrap Flow
+Template do szybkiego startu aplikacji z bootstrapem AWS Organizations + IAM + governance GitHub.
 
-1. Utwórz nowe repozytorium na podstawie szablonu `SOLID-FULLSTACK-TEMPLATE`.
+## 1. One-time prerequisite (na AWS management account + GitHub org)
 
-1. Jeśli to pierwsze repo na tym koncie AWS:
-    - sklonuj repo lokalnie,
-    - skonfiguruj `aws-cli` / Identity Federation (SSO),
-    - uruchom lokalnie Terraform `terraform/prerequisite/aws`, który tworzy:
-      - rolę OIDC dla GitHub Actions (np. `gha-bootstrap-org`),
-      - bucket S3 dla backendów Terraform,
-      - tabelę DynamoDB dla locków Terraform.
-    - wykonaj jednorazowo GitHub prerequisite (`terraform/prerequisite/gh`) i ustaw sekrety GitHub App dla workflow (pólautomatyczny krok).
+1. Wykonaj AWS prerequisite:
+   - [terraform/prerequisite/aws/README.md](terraform/prerequisite/aws/README.md)
+1. Wykonaj GitHub prerequisite (GitHub App):
+   - [terraform/prerequisite/gh/README.md](terraform/prerequisite/gh/README.md)
+1. Ustaw GitHub Variables (repo lub org):
+   - `AWS_REGION`
+   - `AWS_ROLE_TO_ASSUME`
+   - `TF_STATE_BUCKET`
+   - `TF_LOCK_TABLE`
+   - opcjonalnie `TF_STATE_KEY_PREFIX` (domyslnie workflow uzywa `bootstrap-org`)
+1. Ustaw GitHub Secrets (repo lub org):
+   - `GH_APP_ID`
+   - `GH_APP_PRIVATE_KEY`
 
-1. W GitHub (repo lub org) ustaw zmienne z outputów `terraform/prerequisite/aws`:
-    - `AWS_REGION`
-    - `AWS_ROLE_TO_ASSUME`
-    - `TF_LOCK_TABLE`
-    - `TF_STATE_BUCKET`
+## 2. Per nowe repo utworzone z template (zalecany flow)
 
-1. Uruchom workflow `bootstrap-org`:
-    - workflow pobiera token OIDC (`id-token: write`),
-    - AWS trust policy pozwala temu tokenowi przyjąć rolę z `AWS_ROLE_TO_ASSUME`,
-    - workflow uruchamia Terraform i tworzy OU + konta zgodnie z presetem.
+Uruchom workflow `bootstrap-all` i podaj:
+- `app_slug` (np. `todo-list`)
+- `root_email_base` (np. `owner@example.com`)
+- `bootstrap_mode` (`safe` albo `debug`)
+- `debug_suffix` (opcjonalnie, glownie dla `debug`)
+- `preset` (`minimal`, `dev-lite`, `dev-standard`, `release`, `full-qa`)
+- `aws_region` (opcjonalnie; puste = `AWS_REGION` z Variables)
 
-1. Uruchom workflow `bootstrap-iam-matrix`:
-    - workflow czyta `account_ids` ze stanu `bootstrap-org`,
-    - uruchamia `bootstrap-iam` per konto i tworzy role `gha-environment-deploy`.
+`bootstrap-all` uruchamia automatycznie:
+1. `bootstrap-org` (OU + konta AWS z presetu)
+1. `bootstrap-iam-matrix` (rola `gha-environment-deploy` w kazdym koncie)
+1. `bootstrap-gh-core` (branche, default branch, GitHub Environments)
+1. `bootstrap-gh-bind` (AWS role vars per GitHub Environment)
 
-1. Uruchom workflow `bootstrap-gh-core`:
-    - tworzy branche repo zgodnie z presetem,
-    - ustawia `default_branch` z presetu (przez GitHub App token),
-    - tworzy GitHub Environments zgodnie z listą `aws_accounts` z presetu.
+Szczegoly workflow:
+- [.github/workflows/README.md](.github/workflows/README.md)
 
-1. Uruchom workflow `bootstrap-gh-bind`:
-    - workflow czyta `account_ids` ze stanu `bootstrap-org`,
-    - buduje `AWS_ROLE_TO_ASSUME` (`gha-environment-deploy`) per environment,
-    - zapisuje `AWS_ROLE_TO_ASSUME` i `AWS_REGION` do GitHub Environment Variables.
+## 3. Manualny fallback (gdy nie uzywasz orchestratora)
 
-1. Docelowo będzie jeden workflow orchestratora `bootstrap-all`, który uruchomi:
-    - `bootstrap-org` (OU + konta),
-    - `bootstrap-iam` (OIDC + role `gha-environment-deploy` w kontach member),
-    - `bootstrap-gh-core` (utworzenie environments/branches/rulesets),
-    - `bootstrap-gh-bind` (powiązanie outputów AWS z GitHub env vars/secrets).
+1. `bootstrap-org`
+1. `bootstrap-iam-matrix`
+1. `bootstrap-gh-core`
+1. `bootstrap-gh-bind`
+
+## 4. Presety
+
+Kontrakt presetow jest w:
+- [config/README.md](config/README.md)
+- [config/presets.json](config/presets.json)

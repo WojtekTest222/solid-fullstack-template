@@ -1,47 +1,38 @@
-# 1. GitHub Prerequisite (One-Time, Per Org)
+# GitHub prerequisite (one-time per org)
 
-Ten katalog opisuje jednorazowy prerequisite po stronie GitHub Organization.
-To nie jest krok per-repo. Robisz go raz, a potem korzystaja z niego wszystkie repo tworzone z template.
+Ten krok wykonujesz raz na organizacje GitHub. Tworzy GitHub App, ktora daje workflowom uprawnienia governance na repo.
 
-Cel:
-- utworzyc GitHub App do operacji governance wymagajacych uprawnienia administracyjnego repo (np. zmiana `default_branch`),
-- zapisac dane appki jako org/repo secrets dla workflow.
+## 1. Wymagane uprawnienia appki
 
-## 1.1. Dlaczego to jest pólautomatyczne
+Repository permissions:
+- `Administration: Read and write`
+- `Contents: Read and write`
+- `Actions: Read and write`
+- `Environments: Read and write`
+- `Metadata: Read-only`
 
-Utworzenie GitHub App opiera sie o manifest flow i wymaga kroku w przegladarce (redirect + code exchange).
-To oznacza, ze mozna to zautomatyzowac tylko czesciowo skryptem.
+## 2. Utworzenie appki (semi-auto)
 
-## 1.2. Wymagane uprawnienia GitHub App
+1. Uruchom skrypt:
+   ```ps
+   Set-Location terraform/prerequisite/gh
+   python bootstrap-gh-app-manifest.py `
+     --org KnightRadiants `
+     --app-name "gha-template-bootstrap" `
+     --description "Bootstrap app for template governance" `
+     --output-dir "./out" `
+     --open-browser
+   ```
+1. W przegladarce zatwierdz utworzenie appki.
+1. Po callbacku skrypt zapisze:
+   - `github-app-<APP_ID>.private-key.pem`
+   - `github-app-<APP_ID>.credentials.json`
+   - i wypisze `Install URL`.
+1. Zainstaluj appke na repo, ktore beda bootstrapowane.
+1. Jesli zmieniles permissiony appki po instalacji, zaakceptuj `Permission updates requested` w organizacji.
 
-Minimalny zestaw (Repository permissions):
-- `Administration: Read & write`
-- `Contents: Read & write`
-- `Actions: Read & write`
-- `Environments: Read & write`
+## 3. Sekrety dla workflow
 
-Jesli appka zostala utworzona wczesniej bez `Environments: Read & write`, edytuj uprawnienia appki i zaakceptuj update instalacji w organizacji.
-
-## 1.3. One-time setup
-
-1. Uruchom skrypt półautomatyczny (manifest flow):
-    ```ps
-    Set-Location terraform/prerequisite/gh
-    python bootstrap-gh-app-manifest.py `
-      --org KnightRadiants `
-      --app-name "gha-template-bootstrap" `
-      --description "Bootstrap app for template governance" `
-      --output-dir "./out" `
-      --open-browser
-    ```
-1. W przegladarce zatwierdz utworzenie appki (to jest wymagany krok manualny).
-    - Skrypt uruchamia lokalny endpoint `http://127.0.0.1:<port>/start`, ktory wysyla `POST` z `manifest` do GitHub.
-    - Nie otwieraj "golego" URL `/settings/apps/new` bez manifestu.
-1. Po callbacku skrypt zapisze pliki:
-    - `github-app-<APP_ID>.private-key.pem`
-    - `github-app-<APP_ID>.credentials.json`
-    - i wypisze bezposredni `Install URL` do appki (wyrózniony kolorem zielonym).
-1. Zainstaluj appke na repo, ktore maja byc bootstrapowane.
-1. Zapisz sekrety:
-   - `GH_APP_ID`
-   - `GH_APP_PRIVATE_KEY` (PEM)
+Ustaw Secrets (repo albo org):
+- `GH_APP_ID`
+- `GH_APP_PRIVATE_KEY` (z pliku PEM)
