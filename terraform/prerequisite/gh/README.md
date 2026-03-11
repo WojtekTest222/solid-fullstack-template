@@ -46,6 +46,8 @@ Nazwa Appki jest domyslnie skladana wedlug konwencji `gha-<pierwsze-20-znakow-or
 Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji.
 Jesli pominiesz `--app-name`, skrypt najpierw pokaze Appki znalezione w `app/out` oraz we wspoldzielonym cache credentials dla danej organizacji i pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
 Przy starcie skrypt probuje zsynchronizowac zapisane credentials Appki z AWS SSM Parameter Store (`SecureString`) do lokalnego cache.
+Jesli zapisane credentials wskazuja Appke, ktora zostala juz usunieta z GitHuba, skrypt pominie je i nie zaproponuje ich do reuse.
+Takie stale credentials sa tez automatycznie sprzatane z `app/out`, ze wspoldzielonego cache oraz z AWS SSM.
 Po wybraniu albo utworzeniu Appki wykonuje upsert jej `app_id` i `private_key_pem` do AWS SSM jako backup/fallback.
 W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials z tych lokalizacji.
 Przegladarka dla manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.

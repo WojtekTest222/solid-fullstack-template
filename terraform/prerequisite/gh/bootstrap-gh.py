@@ -532,6 +532,167 @@ def list_known_credentials(search_dirs: list[Path], *, owner: str = "") -> list[
     return bundles
 
 
+def validate_reusable_app_payload(
+    payload: dict,
+    *,
+    owner: str,
+    validation_cache: dict[str, dict | None],
+) -> tuple[bool, str | None]:
+    app_slug = str(payload.get("slug", "")).strip().lower()
+    if not app_slug:
+        return True, None
+
+    if app_slug not in validation_cache:
+        result = run_command(["gh", "api", f"/apps/{app_slug}"])
+        if result.returncode != 0:
+            error_text = "\n".join(part for part in [result.stderr.strip(), result.stdout.strip()] if part).lower()
+            if "http 404" in error_text or '"status":"404"' in error_text or "not found" in error_text:
+                validation_cache[app_slug] = None
+            else:
+                print_step(
+                    f"Could not verify cached GitHub App slug '{app_slug}' against GitHub. "
+                    "Keeping it as a reuse candidate."
+                )
+                validation_cache[app_slug] = {}
+        else:
+            try:
+                validation_cache[app_slug] = json.loads(result.stdout or "{}")
+            except json.JSONDecodeError:
+                print_step(
+                    f"GitHub returned invalid JSON while verifying cached GitHub App slug '{app_slug}'. "
+                    "Keeping it as a reuse candidate."
+                )
+                validation_cache[app_slug] = {}
+
+    response = validation_cache[app_slug]
+    if response is None:
+        return False, f"GitHub App slug '{app_slug}' no longer exists in GitHub."
+    if not response:
+        return True, None
+
+    live_app_id = str(response.get("id", "")).strip()
+    cached_app_id = str(payload.get("id", "")).strip()
+    if live_app_id and cached_app_id and live_app_id != cached_app_id:
+        return False, f"Cached app id '{cached_app_id}' does not match live app id '{live_app_id}'."
+
+    expected_owner = owner.strip().lower()
+    live_owner = str(response.get("owner", {}).get("login", "")).strip().lower()
+    if expected_owner and live_owner and live_owner != expected_owner:
+        return False, f"Live owner '{live_owner}' does not match expected owner '{expected_owner}'."
+
+    return True, None
+
+
+def list_reusable_credentials(
+    search_dirs: list[Path],
+    *,
+    owner: str = "",
+) -> tuple[list[tuple[Path, Path, dict]], list[str], list[dict]]:
+    validation_cache: dict[str, dict | None] = {}
+    reusable_bundles: list[tuple[Path, Path, dict]] = []
+    ignored_messages: list[str] = []
+    stale_payloads: list[dict] = []
+
+    for bundle in list_known_credentials(search_dirs, owner=owner):
+        credentials_file, _, payload = bundle
+        is_reusable, reason = validate_reusable_app_payload(
+            payload,
+            owner=owner,
+            validation_cache=validation_cache,
+        )
+        if is_reusable:
+            reusable_bundles.append(bundle)
+            continue
+
+        ignored_messages.append(
+            f"Ignoring stale GitHub App credentials from '{credentials_file}': "
+            f"{format_app_option(payload)}. {reason}"
+        )
+        stale_payloads.append(payload)
+
+    return reusable_bundles, ignored_messages, stale_payloads
+
+
+def cleanup_stale_credentials(
+    *,
+    stale_payloads: list[dict],
+    search_dirs: list[Path],
+    owner: str,
+    aws_region: str,
+    aws_profile: str,
+) -> None:
+    stale_app_ids = sorted({str(payload.get("id", "")).strip() for payload in stale_payloads if str(payload.get("id", "")).strip()})
+    if not stale_app_ids:
+        return
+
+    print_step(f"Cleaning up stale GitHub App credentials for app ids: {', '.join(stale_app_ids)}.")
+
+    removed_files: list[Path] = []
+    for app_id in stale_app_ids:
+        for search_dir in search_dirs:
+            credentials_file = search_dir / f"github-app-{app_id}.credentials.json"
+            private_key_file = search_dir / f"github-app-{app_id}.private-key.pem"
+            for candidate in [credentials_file, private_key_file]:
+                if not candidate.exists():
+                    continue
+                try:
+                    candidate.unlink()
+                    removed_files.append(candidate)
+                except OSError as exc:
+                    print_step(f"Could not delete stale GitHub App credential file '{candidate}': {exc}")
+
+    if removed_files:
+        print_step(f"Removed {len(removed_files)} stale GitHub App credential file(s) from disk.")
+
+    if not ssm_storage_enabled(aws_region=aws_region):
+        return
+
+    for app_id in stale_app_ids:
+        parameter_name = ssm_parameter_path(owner=owner, app_id=app_id)
+        command = aws_command_base(aws_region=aws_region, aws_profile=aws_profile) + [
+            "ssm",
+            "delete-parameter",
+            "--name",
+            parameter_name,
+        ]
+        result = run_command(command)
+        if result.returncode == 0:
+            print_step(f"Deleted stale AWS SSM GitHub App credential parameter '{parameter_name}'.")
+            continue
+
+        error_text = "\n".join(part for part in [result.stderr.strip(), result.stdout.strip()] if part).lower()
+        if "parameternotfound" in error_text:
+            continue
+
+        print_step(
+            f"Could not delete stale AWS SSM GitHub App credential parameter '{parameter_name}'. "
+            "Leaving it as-is."
+        )
+
+
+def find_existing_credentials_in_bundles(
+    bundles: list[tuple[Path, Path, dict]],
+    app_name: str,
+    *,
+    owner: str = "",
+) -> tuple[Path, Path, dict] | None:
+    expected_slug = slugify(app_name)
+    expected_owner = owner.strip().lower()
+
+    for credentials_file, private_key_file, data in bundles:
+        app_slug = str(data.get("slug", "")).strip().lower()
+        app_display_name = str(data.get("name", "")).strip()
+        owner_login = str(data.get("owner", {}).get("login", "")).strip().lower()
+
+        if expected_owner and owner_login != expected_owner:
+            continue
+        if app_display_name != app_name and app_slug != expected_slug:
+            continue
+        return credentials_file, private_key_file, data
+
+    return None
+
+
 def mirror_bundle_to_directory(credentials_file: Path, private_key_file: Path, target_dir: Path) -> tuple[Path, Path]:
     target_dir.mkdir(parents=True, exist_ok=True)
     target_credentials_file = target_dir / credentials_file.name
@@ -638,11 +799,48 @@ def store_credentials_in_ssm(*, owner: str, payload: dict, private_key_pem: str,
     run_command_checked(command, description=f"Uploading GitHub App credentials to AWS SSM '{parameter_name}'...")
 
 
-def format_app_option(payload: dict) -> str:
+def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
+    org = owner.strip()
+    if not org:
+        return None
+
+    result = run_command(["gh", "api", f"/orgs/{org}/installations"])
+    if result.returncode != 0:
+        print_step(
+            f"Could not read GitHub App installations for org '{org}'. "
+            "Continuing without installation status in the menu."
+        )
+        return None
+
+    try:
+        response = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        print_step(
+            f"GitHub returned invalid JSON for org installation lookup '{org}'. "
+            "Continuing without installation status in the menu."
+        )
+        return None
+
+    installed_ids: set[str] = set()
+    for installation in response.get("installations", []):
+        app_id = str(installation.get("app_id", "")).strip()
+        if app_id:
+            installed_ids.add(app_id)
+
+    return installed_ids
+
+
+def format_app_option(payload: dict, *, installed_app_ids: set[str] | None = None) -> str:
     name = str(payload.get("name", "")).strip() or "(unnamed)"
     slug = str(payload.get("slug", "")).strip() or "n/a"
     app_id = str(payload.get("id", "")).strip() or "n/a"
-    return f"{name} [id {app_id}, slug {slug}]"
+    if installed_app_ids is None:
+        installation_status = "installation unknown"
+    elif app_id in installed_app_ids:
+        installation_status = "installed"
+    else:
+        installation_status = "not installed"
+    return f"{name} [id {app_id}, slug {slug}, {installation_status}]"
 
 
 def resolve_app_target(
@@ -651,23 +849,36 @@ def resolve_app_target(
     owner: str,
     requested_app_name: str,
     force_create_app: bool,
+    aws_region: str,
+    aws_profile: str,
 ) -> tuple[str, tuple[Path, Path, dict] | None]:
     target_app_name = requested_app_name.strip() or build_default_app_name(owner)
-    known_credentials = list_known_credentials(search_dirs, owner=owner)
+    known_credentials, ignored_messages, stale_payloads = list_reusable_credentials(search_dirs, owner=owner)
+    installed_app_ids = fetch_installed_app_ids_for_owner(owner)
+
+    for message in ignored_messages:
+        print_step(message)
+    cleanup_stale_credentials(
+        stale_payloads=stale_payloads,
+        search_dirs=search_dirs,
+        owner=owner,
+        aws_region=aws_region,
+        aws_profile=aws_profile,
+    )
 
     if force_create_app:
         app_name = prompt_with_default(target_app_name, "New GitHub App name", default=target_app_name)
         return app_name, None
 
     if requested_app_name.strip():
-        explicit_bundle = find_existing_credentials(search_dirs, target_app_name, owner=owner)
+        explicit_bundle = find_existing_credentials_in_bundles(known_credentials, target_app_name, owner=owner)
         if explicit_bundle:
             print_step(f"Reusing GitHub App matching requested name: {target_app_name}.")
             return target_app_name, explicit_bundle
         return target_app_name, None
 
     if not sys.stdin.isatty():
-        conventional_bundle = find_existing_credentials(search_dirs, target_app_name, owner=owner)
+        conventional_bundle = find_existing_credentials_in_bundles(known_credentials, target_app_name, owner=owner)
         if conventional_bundle:
             print_step(f"Reusing GitHub App matching expected name: {target_app_name}.")
             return target_app_name, conventional_bundle
@@ -684,13 +895,22 @@ def resolve_app_target(
         return target_app_name, None
 
     if known_credentials:
-        option_labels = [format_app_option(payload) for _, _, payload in known_credentials]
+        option_labels = [
+            format_app_option(payload, installed_app_ids=installed_app_ids)
+            for _, _, payload in known_credentials
+        ]
         option_labels.append(f"Create new GitHub App [{target_app_name}]")
         selected_index = select_with_arrows("Select GitHub App", option_labels)
         if selected_index < len(known_credentials):
             _, _, payload = known_credentials[selected_index]
             actual_name = str(payload.get("name", "")).strip() or target_app_name
             print_step(f"Selected existing GitHub App: {actual_name}.")
+            selected_app_id = str(payload.get("id", "")).strip()
+            if installed_app_ids is not None and selected_app_id and selected_app_id not in installed_app_ids:
+                print_step(
+                    "Selected GitHub App exists, but is not installed on this organization yet. "
+                    "Bootstrap can continue; installation is still a separate step."
+                )
             return actual_name, known_credentials[selected_index]
 
     app_name = prompt_with_default(target_app_name, "New GitHub App name", default=target_app_name)
@@ -811,6 +1031,8 @@ def main() -> int:
         owner=args.org,
         requested_app_name=args.app_name,
         force_create_app=args.force_create_app,
+        aws_region=aws_region,
+        aws_profile=aws_profile,
     )
 
     if credentials_bundle:
