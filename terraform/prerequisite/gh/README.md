@@ -20,6 +20,7 @@ Etap 0 sklada sie z trzech czesci:
    gh auth refresh -h github.com -s admin:org
    ```
    Skrypt sprobuje odpalic ten refresh automatycznie, jesli scope bedzie brakowal.
+1. Przy repo-level walidacji instalacji GitHub App skrypt moze tez potrzebowac scope `user` i sprobuje dodac go automatycznie.
 
 ## 2. Szybki start (zalecane)
 

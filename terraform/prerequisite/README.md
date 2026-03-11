@@ -40,5 +40,6 @@ W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke a
 Przegladarka dla GitHub App manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 Do org-level variables/secrets/team management potrzebny jest `gh` z zakresem `admin:org`.
 Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.
+Przy repo-level walidacji instalacji GitHub App skrypt moze tez automatycznie poprosic o scope `user`.
 
 Po wykonaniu prerequisite uruchamiasz `bootstrap-all`.

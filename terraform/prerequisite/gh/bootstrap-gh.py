@@ -867,7 +867,7 @@ def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
 
 
 def fetch_repo_names_for_installation(installation_id: str) -> set[str]:
-    ensure_gh_scope("read:user")
+    ensure_gh_scope("user")
     repo_names: set[str] = set()
     page = 1
     per_page = 100
