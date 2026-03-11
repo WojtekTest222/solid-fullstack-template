@@ -28,6 +28,8 @@ MAX_GITHUB_APP_NAME_LENGTH = 34
 DEFAULT_ORG_SEGMENT_LENGTH = 20
 DEFAULT_APP_SUFFIX_LENGTH = 6
 GH_WRITE_MAX_ATTEMPTS = 4
+GH_AUTH_REFRESH_MAX_ATTEMPTS = 3
+GH_AUTH_REFRESH_RETRY_DELAY_SECONDS = 3
 SHARED_CREDENTIALS_DIR_NAME = "gh-app-credentials"
 SSM_APP_CREDENTIALS_ROOT = "/solid-fullstack-template/bootstrap/github-apps"
 APP_INSTALL_WAIT_TIMEOUT_SECONDS = 600
@@ -417,15 +419,28 @@ def ensure_gh_scope(required_scope: str) -> None:
         return
     if sys.stdin.isatty():
         print_step(f"GitHub CLI is missing scope '{required_scope}'. Starting `gh auth refresh`...")
-        run_command_live_checked(
-            ["gh", "auth", "refresh", "-h", "github.com", "-s", required_scope],
-            description=f"Refreshing GitHub CLI authentication to add scope '{required_scope}'...",
-        )
-        refreshed_status = get_gh_auth_status_text()
-        refreshed_scopes = extract_gh_scopes(refreshed_status)
-        if refreshed_scopes and required_scope in refreshed_scopes:
-            print_step(f"GitHub CLI scope '{required_scope}' is available after refresh.")
-            return
+        refreshed_scopes: set[str] = set()
+        for attempt in range(1, GH_AUTH_REFRESH_MAX_ATTEMPTS + 1):
+            result = subprocess.run(
+                ["gh", "auth", "refresh", "-h", "github.com", "-s", required_scope],
+                check=False,
+            )
+            refreshed_status = get_gh_auth_status_text()
+            refreshed_scopes = extract_gh_scopes(refreshed_status)
+            if refreshed_scopes and required_scope in refreshed_scopes:
+                print_step(f"GitHub CLI scope '{required_scope}' is available after refresh.")
+                return
+            if result.returncode == 0:
+                break
+            if attempt < GH_AUTH_REFRESH_MAX_ATTEMPTS:
+                print_step(
+                    f"`gh auth refresh` did not complete successfully. "
+                    f"Retrying in {GH_AUTH_REFRESH_RETRY_DELAY_SECONDS}s "
+                    f"({attempt}/{GH_AUTH_REFRESH_MAX_ATTEMPTS - 1} retries used)..."
+                )
+                time.sleep(GH_AUTH_REFRESH_RETRY_DELAY_SECONDS)
+                continue
+
         available_after_refresh = ", ".join(sorted(refreshed_scopes)) if refreshed_scopes else "unknown"
         raise RuntimeError(
             f"GitHub CLI still does not expose required scope '{required_scope}' after refresh. "
