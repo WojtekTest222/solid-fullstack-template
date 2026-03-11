@@ -49,6 +49,7 @@ Przy starcie skrypt probuje zsynchronizowac zapisane credentials Appki z AWS SSM
 Jesli zapisane credentials wskazuja Appke, ktora zostala juz usunieta z GitHuba, skrypt pominie je i nie zaproponuje ich do reuse.
 Takie stale credentials sa tez automatycznie sprzatane z `app/out`, ze wspoldzielonego cache oraz z AWS SSM.
 Po wybraniu albo utworzeniu Appki wykonuje upsert jej `app_id` i `private_key_pem` do AWS SSM jako backup/fallback.
+Jesli Appka nie jest jeszcze zainstalowana dla `--bootstrap-repo` albo repo nie jest objete jej instalacja, skrypt poda link do instalacji/konfiguracji, moze otworzyc przegladarke i poczeka na dostep do repo.
 W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials z tych lokalizacji.
 Przegladarka dla manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 

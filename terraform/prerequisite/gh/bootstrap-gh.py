@@ -19,6 +19,8 @@ import shutil
 import subprocess
 import sys
 import time
+import webbrowser
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DEFAULT_APP_PREFIX = "gha"
@@ -28,6 +30,8 @@ DEFAULT_APP_SUFFIX_LENGTH = 6
 GH_WRITE_MAX_ATTEMPTS = 4
 SHARED_CREDENTIALS_DIR_NAME = "gh-app-credentials"
 SSM_APP_CREDENTIALS_ROOT = "/solid-fullstack-template/bootstrap/github-apps"
+APP_INSTALL_WAIT_TIMEOUT_SECONDS = 600
+APP_INSTALL_WAIT_POLL_SECONDS = 5
 ANSI_RED = "\033[91m"
 ANSI_RESET = "\033[0m"
 
@@ -40,6 +44,10 @@ def red(text: str) -> str:
 
 def print_step(message: str) -> None:
     print(f"[INFO] {message}", flush=True)
+
+
+def format_local_time(value: datetime) -> str:
+    return value.astimezone().strftime("%H:%M:%S")
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -799,35 +807,195 @@ def store_credentials_in_ssm(*, owner: str, payload: dict, private_key_pem: str,
     run_command_checked(command, description=f"Uploading GitHub App credentials to AWS SSM '{parameter_name}'...")
 
 
-def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
+def build_app_install_url(app_slug: str) -> str:
+    return f"https://github.com/apps/{app_slug}/installations/new"
+
+
+def fetch_installations_for_owner(owner: str, *, strict: bool) -> dict[str, dict] | None:
     org = owner.strip()
     if not org:
         return None
 
     result = run_command(["gh", "api", f"/orgs/{org}/installations"])
     if result.returncode != 0:
-        print_step(
-            f"Could not read GitHub App installations for org '{org}'. "
-            "Continuing without installation status in the menu."
-        )
+        if strict:
+            raise RuntimeError(
+                f"Could not read GitHub App installations for org '{org}'.\n"
+                f"Command failed ({result.returncode}): gh api /orgs/{org}/installations\n"
+                f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+            )
+        print_step(f"Could not read GitHub App installations for org '{org}'. Continuing without installation status in the menu.")
         return None
 
     try:
         response = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        print_step(
-            f"GitHub returned invalid JSON for org installation lookup '{org}'. "
-            "Continuing without installation status in the menu."
-        )
+        if strict:
+            raise RuntimeError(f"GitHub returned invalid JSON for org installation lookup '{org}'.")
+        print_step(f"GitHub returned invalid JSON for org installation lookup '{org}'. Continuing without installation status in the menu.")
         return None
 
-    installed_ids: set[str] = set()
+    installations: dict[str, dict] = {}
     for installation in response.get("installations", []):
         app_id = str(installation.get("app_id", "")).strip()
         if app_id:
-            installed_ids.add(app_id)
+            installations[app_id] = installation
 
-    return installed_ids
+    return installations
+
+
+def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
+    installations = fetch_installations_for_owner(owner, strict=False)
+    if installations is None:
+        return None
+    return set(installations.keys())
+
+
+def fetch_repo_names_for_installation(installation_id: str) -> set[str]:
+    ensure_gh_scope("read:user")
+    repo_names: set[str] = set()
+    page = 1
+    per_page = 100
+
+    while True:
+        command = [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            f"/user/installations/{installation_id}/repositories",
+            "--field",
+            f"per_page={per_page}",
+            "--field",
+            f"page={page}",
+        ]
+        result = run_command(command)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Could not read repositories for GitHub App installation '{installation_id}'.\n"
+                f"Command failed ({result.returncode}): {' '.join(command)}\n"
+                f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+            )
+
+        try:
+            response = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"GitHub returned invalid JSON while reading repositories for installation '{installation_id}'."
+            ) from exc
+
+        repositories = response.get("repositories", [])
+        for repository in repositories:
+            full_name = str(repository.get("full_name", "")).strip().lower()
+            if full_name:
+                repo_names.add(full_name)
+
+        total_count = int(response.get("total_count", 0) or 0)
+        if not repositories or len(repo_names) >= total_count or len(repositories) < per_page:
+            break
+        page += 1
+
+    return repo_names
+
+
+def get_repo_installation_status_for_app(*, owner: str, repo: str, payload: dict) -> dict[str, str | bool]:
+    app_id = str(payload.get("id", "")).strip()
+    app_slug = str(payload.get("slug", "")).strip()
+    app_name = str(payload.get("name", "")).strip() or app_slug or app_id or "GitHub App"
+    repo_full_name = f"{owner}/{repo}".strip().lower()
+    install_url = build_app_install_url(app_slug) if app_slug else ""
+
+    installations = fetch_installations_for_owner(owner, strict=True)
+    if installations is None:
+        raise RuntimeError(f"Could not read GitHub App installations for org '{owner}'.")
+
+    installation = installations.get(app_id)
+    if installation is None:
+        return {
+            "available": False,
+            "status": "not installed on org",
+            "action_url": install_url,
+            "message": (
+                f"GitHub App '{app_name}' is not installed on organization '{owner}'. "
+                f"Install it for repo '{owner}/{repo}'."
+            ),
+        }
+
+    repository_selection = str(installation.get("repository_selection", "")).strip().lower()
+    installation_url = str(installation.get("html_url", "")).strip() or install_url
+    if repository_selection == "all":
+        return {
+            "available": True,
+            "status": "available for repo",
+            "action_url": installation_url,
+            "message": f"GitHub App '{app_name}' is installed for repo '{owner}/{repo}'.",
+        }
+
+    installation_id = str(installation.get("id", "")).strip()
+    repo_names = fetch_repo_names_for_installation(installation_id)
+    if repo_full_name in repo_names:
+        return {
+            "available": True,
+            "status": "available for repo",
+            "action_url": installation_url,
+            "message": f"GitHub App '{app_name}' is installed for repo '{owner}/{repo}'.",
+        }
+
+    return {
+        "available": False,
+        "status": "org installed, repo not selected",
+        "action_url": installation_url,
+        "message": (
+            f"GitHub App '{app_name}' is installed on organization '{owner}', "
+            f"but repo '{owner}/{repo}' is not included in the installation."
+        ),
+    }
+
+
+def ensure_app_available_for_repo(*, owner: str, repo: str, payload: dict, open_browser: bool) -> None:
+    status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+    if status["available"]:
+        print_step(str(status["message"]))
+        return
+
+    action_url = str(status.get("action_url", "")).strip()
+    if not action_url:
+        raise RuntimeError(str(status["message"]))
+
+    print_step(str(status["message"]))
+    print("GitHub App installation/configuration URL:")
+    print(action_url)
+    if open_browser:
+        opened = webbrowser.open(action_url, new=1, autoraise=True)
+        if not opened:
+            print_step("Failed to open browser automatically. Open the installation/configuration URL manually.")
+
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"GitHub App is not yet available for repo '{owner}/{repo}'. "
+            f"Open: {action_url}"
+        )
+
+    started_at = datetime.now().astimezone()
+    timeout_at = started_at + timedelta(seconds=APP_INSTALL_WAIT_TIMEOUT_SECONDS)
+    print(
+        f"Waiting for GitHub App access on {owner}/{repo} "
+        f"(now: {format_local_time(started_at)}, timeout at: {format_local_time(timeout_at)})..."
+    )
+    print("Press Ctrl+C to cancel.")
+
+    deadline_monotonic = time.monotonic() + APP_INSTALL_WAIT_TIMEOUT_SECONDS
+    while True:
+        time.sleep(APP_INSTALL_WAIT_POLL_SECONDS)
+        status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+        if status["available"]:
+            print_step(str(status["message"]))
+            return
+        if time.monotonic() >= deadline_monotonic:
+            raise RuntimeError(
+                f"Timed out waiting for GitHub App access on repo '{owner}/{repo}'. "
+                f"Finish installation/configuration here: {action_url}"
+            )
 
 
 def format_app_option(payload: dict, *, installed_app_ids: set[str] | None = None) -> str:
@@ -837,9 +1005,9 @@ def format_app_option(payload: dict, *, installed_app_ids: set[str] | None = Non
     if installed_app_ids is None:
         installation_status = "installation unknown"
     elif app_id in installed_app_ids:
-        installation_status = "installed"
+        installation_status = "installed on org"
     else:
-        installation_status = "not installed"
+        installation_status = "not installed on org"
     return f"{name} [id {app_id}, slug {slug}, {installation_status}]"
 
 
@@ -908,8 +1076,7 @@ def resolve_app_target(
             selected_app_id = str(payload.get("id", "")).strip()
             if installed_app_ids is not None and selected_app_id and selected_app_id not in installed_app_ids:
                 print_step(
-                    "Selected GitHub App exists, but is not installed on this organization yet. "
-                    "Bootstrap can continue; installation is still a separate step."
+                    f"Selected GitHub App is not installed on organization '{owner}' yet."
                 )
             return actual_name, known_credentials[selected_index]
 
@@ -1088,6 +1255,12 @@ def main() -> int:
         private_key_pem=private_key_pem,
         aws_region=aws_region,
         aws_profile=aws_profile,
+    )
+    ensure_app_available_for_repo(
+        owner=args.org,
+        repo=args.bootstrap_repo,
+        payload=payload,
+        open_browser=args.open_browser,
     )
 
     grant_admin_repo = None if args.skip_team_repo_admin_grant else args.bootstrap_repo
