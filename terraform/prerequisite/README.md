@@ -28,9 +28,9 @@ Jesli pominiesz `--aws-region`, skrypt pokaze menu obslugiwane strzalkami:
 - `Custom`
 Jesli nie ustawisz `AWS_PROFILE` i nie podasz `--aws-profile`, skrypt AWS wyswietli profile znalezione w `~/.aws` i poprosi o wybor strzalkami.
 GitHub App jest domyslnie nazywana wedlug konwencji `gha-<pierwsze-20-znakow-org>-<hash6>`.
-Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji, wiec kolejne uruchomienia moga skipnac tworzenie Appki.
-Jesli lokalne credentials dla takiej nazwy juz istnieja w `gh/app/out`, skrypt pominie tworzenie Appki i je zre-uzyje.
-Jesli pominiesz `--app-name`, skrypt GitHub pokaze znane lokalnie Appki z `gh/app/out`, pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
+Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji.
+Jesli pominiesz `--app-name`, skrypt GitHub najpierw pokaze znane lokalnie Appki z `gh/app/out`, pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
+W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials.
 Przegladarka dla GitHub App manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 Do org-level variables/secrets/team management potrzebny jest `gh` z zakresem `admin:org`.
 Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.

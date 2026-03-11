@@ -42,9 +42,9 @@ Co zrobi orchestrator:
 
 Przy `--scope org` wartosci sa zapisywane jako org-level i ograniczone do `--bootstrap-repo` (`visibility=selected`).
 Nazwa Appki jest domyslnie skladana wedlug konwencji `gha-<pierwsze-20-znakow-org>-<hash6>`.
-Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji, wiec kolejne uruchomienia moga skipnac tworzenie Appki.
-Jesli lokalne credentials dla takiej nazwy juz istnieja w `app/out`, skrypt pominie tworzenie Appki i je zre-uzyje.
-Jesli pominiesz `--app-name`, skrypt pokaze Appki znalezione lokalnie w `app/out` dla danej organizacji i pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
+Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji.
+Jesli pominiesz `--app-name`, skrypt najpierw pokaze Appki znalezione lokalnie w `app/out` dla danej organizacji i pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
+W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials.
 Przegladarka dla manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 
 Zmienne AWS bootstrapowe ustawia osobno [../aws/bootstrap-aws.py](../aws/bootstrap-aws.py).

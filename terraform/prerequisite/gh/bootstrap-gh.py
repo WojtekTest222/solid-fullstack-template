@@ -396,20 +396,22 @@ def resolve_app_target(
     target_app_name = requested_app_name.strip() or build_default_app_name(owner)
     known_credentials = list_known_credentials(output_dir, owner=owner)
 
-    if not force_create_app:
-        conventional_bundle = find_existing_credentials(output_dir, target_app_name, owner=owner)
-        if conventional_bundle:
-            print_step(f"Reusing GitHub App matching expected name: {target_app_name}.")
-            return target_app_name, conventional_bundle
-
     if force_create_app:
         app_name = prompt_with_default(target_app_name, "New GitHub App name", default=target_app_name)
         return app_name, None
 
     if requested_app_name.strip():
+        explicit_bundle = find_existing_credentials(output_dir, target_app_name, owner=owner)
+        if explicit_bundle:
+            print_step(f"Reusing GitHub App matching requested name: {target_app_name}.")
+            return target_app_name, explicit_bundle
         return target_app_name, None
 
     if not sys.stdin.isatty():
+        conventional_bundle = find_existing_credentials(output_dir, target_app_name, owner=owner)
+        if conventional_bundle:
+            print_step(f"Reusing GitHub App matching expected name: {target_app_name}.")
+            return target_app_name, conventional_bundle
         if len(known_credentials) == 1:
             _, _, payload = known_credentials[0]
             actual_name = str(payload.get("name", "")).strip() or target_app_name
