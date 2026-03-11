@@ -9,7 +9,41 @@ Ten stack wykonujesz raz na management account. Tworzy fundament pod wszystkie k
 1. OIDC provider `token.actions.githubusercontent.com` (lub reuse)
 1. Rola bootstrapowa dla GitHub Actions (domyslnie `gha-bootstrap-org`)
 
-## 2. Uruchomienie lokalne (SSO)
+Konwencje:
+- bucket: `tfstate-<ACCOUNT_ID>-<REGION>`
+- lock table: `terraform-locks`
+- bootstrap role name: `gha-bootstrap-org`
+- state prefix dla workflow: `bootstrap-org`
+
+## 2. Szybki start (zalecane)
+
+```ps1
+Set-Location terraform/prerequisite/aws
+
+$env:AWS_PROFILE = "mafi-general-sso"
+aws sso login --profile $env:AWS_PROFILE
+gh auth login
+
+python bootstrap-aws.py `
+  --org KnightRadiants `
+  --repo solid-fullstack-template-manual `
+  --aws-region eu-central-1
+```
+
+Jesli nie ustawisz `AWS_PROFILE` i nie podasz `--aws-profile`, skrypt wyswietli profile znalezione w `~/.aws` i poprosi o wybor strzalkami.
+Do ustawiania org-level GitHub Variables potrzebny jest `gh` z zakresem `admin:org`.
+Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.
+
+Co zrobi skrypt:
+1. Wykona `terraform init` i `terraform apply` dla prerequisite AWS.
+1. Odczyta output `tf_state_bucket`.
+1. Ustawi org-level GitHub Variables ograniczone do wskazanego repo:
+   - `AWS_REGION`
+   - `AWS_ACCOUNT_ID`
+   - `BOOTSTRAP_ROLE_NAME`
+   - `TF_STATE_BUCKET`
+
+## 3. Manualny fallback (SSO)
 
 1. Przejdz do katalogu:
    ```ps
@@ -34,20 +68,14 @@ Ten stack wykonujesz raz na management account. Tworzy fundament pod wszystkie k
    terraform apply -var-file="terraform.tfvars"
    ```
 
-## 3. Co ustawic po apply w GitHub
-
-Ustaw Variables (repo albo org):
-- `AWS_REGION` (output `aws_region`)
-- `AWS_ROLE_TO_ASSUME` (output `bootstrap_role_arn`)
+Po manualnym `apply` ustaw w GitHub Variables (repo albo org):
+- `AWS_REGION`
+- `AWS_ACCOUNT_ID`
+- `BOOTSTRAP_ROLE_NAME`
 - `TF_STATE_BUCKET` (output `tf_state_bucket`)
-- `TF_LOCK_TABLE` (output `tf_lock_table`)
-- opcjonalnie `TF_STATE_KEY_PREFIX` (jesli chcesz inny prefix niz `bootstrap-org`)
-
-Alternatywa dla `AWS_ROLE_TO_ASSUME`:
-- `AWS_ACCOUNT_ID` + `BOOTSTRAP_ROLE_NAME`
 
 ## 4. Najwazniejsze inputy
 
 - `github_org` - wymagany
-- `github_repo` - opcjonalny (zawaza trust policy do jednego repo)
+- `github_repo` - wymagany w zalecanym flow; zawaza trust policy do jednego repo
 - `github_subject_patterns` - opcjonalne wzorce `sub` dla OIDC

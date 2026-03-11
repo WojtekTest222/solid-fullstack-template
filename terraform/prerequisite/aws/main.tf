@@ -1,10 +1,9 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
-data "aws_region" "current" {}
 
 locals {
-  tf_state_bucket_name = var.tf_state_bucket_name != "" ? var.tf_state_bucket_name : "tfstate-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
-  tf_lock_table_name   = var.tf_lock_table_name != "" ? var.tf_lock_table_name : "terraform-locks"
+  tf_state_bucket_name = "tfstate-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+  tf_lock_table_name   = "terraform-locks"
 }
 
 resource "aws_s3_bucket" "tf_state" {

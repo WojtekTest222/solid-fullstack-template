@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""
+Local orchestrator for AWS prerequisite bootstrap.
+
+Stage order:
+1) Apply prerequisite Terraform with minimal inputs.
+2) Read the generated state bucket name from Terraform output.
+3) Upsert required GitHub variables via gh CLI using repository-scoped org variables.
+"""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DEFAULT_BOOTSTRAP_ROLE_NAME = "gha-bootstrap-org"
+DEFAULT_LOCK_TABLE_NAME = "terraform-locks"
+
+
+def print_step(message: str) -> None:
+    print(f"[INFO] {message}", flush=True)
+
+
+def run_command(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, text=True, capture_output=True, check=False, cwd=cwd)
+
+
+def run_command_live_checked(command: list[str], *, cwd: Path | None = None, description: str = "") -> None:
+    if description:
+        print_step(description)
+    result = subprocess.run(command, check=False, cwd=cwd)
+    if result.returncode != 0:
+        message = (
+            f"{description}\n" if description else ""
+        ) + f"Command failed ({result.returncode}): {' '.join(command)}"
+        raise RuntimeError(message)
+
+
+def run_command_checked(command: list[str], *, cwd: Path | None = None, description: str = "") -> str:
+    if description:
+        print_step(description)
+    result = run_command(command, cwd=cwd)
+    if result.returncode != 0:
+        message = (
+            f"{description}\n" if description else ""
+        ) + (
+            f"Command failed ({result.returncode}): {' '.join(command)}\n"
+            f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+        )
+        raise RuntimeError(message)
+    return result.stdout.strip()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bootstrap AWS prerequisite Terraform and publish required GitHub variables."
+    )
+    parser.add_argument("--org", required=True, help="GitHub organization")
+    parser.add_argument("--repo", required=True, help="Repository name that receives bootstrap variables")
+    parser.add_argument("--aws-region", required=True, help="AWS region for prerequisite resources")
+    parser.add_argument("--aws-profile", default="", help="AWS profile to use")
+    return parser.parse_args()
+
+
+def aws_config_dir() -> Path:
+    config_path = os.environ.get("AWS_CONFIG_FILE", "")
+    credentials_path = os.environ.get("AWS_SHARED_CREDENTIALS_FILE", "")
+
+    if config_path:
+        return Path(config_path).expanduser().resolve().parent
+    if credentials_path:
+        return Path(credentials_path).expanduser().resolve().parent
+    return Path.home() / ".aws"
+
+
+def normalize_profile_name(section: str, *, from_config: bool) -> str:
+    if not from_config:
+        return section.strip()
+    if section == "default":
+        return "default"
+    if section.startswith("profile "):
+        return section[len("profile ") :].strip()
+    return section.strip()
+
+
+def read_menu_key() -> str:
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            char = msvcrt.getwch()
+            if char in ("\x00", "\xe0"):
+                extended = msvcrt.getwch()
+                if extended == "H":
+                    return "up"
+                if extended == "P":
+                    return "down"
+                continue
+            if char == "\r":
+                return "enter"
+            if char == "\x03":
+                raise KeyboardInterrupt
+            continue
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        char = sys.stdin.read(1)
+        if char in ("\r", "\n"):
+            return "enter"
+        if char == "\x03":
+            raise KeyboardInterrupt
+        if char == "\x1b":
+            next_char = sys.stdin.read(1)
+            if next_char == "[":
+                final_char = sys.stdin.read(1)
+                if final_char == "A":
+                    return "up"
+                if final_char == "B":
+                    return "down"
+        return ""
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def render_arrow_menu(options: list[str], selected_index: int, *, redraw: bool) -> None:
+    if redraw:
+        sys.stdout.write(f"\x1b[{len(options)}A")
+    for index, option in enumerate(options):
+        prefix = "> " if index == selected_index else "  "
+        sys.stdout.write(f"\r{prefix}{option}\x1b[K\n")
+    sys.stdout.flush()
+
+
+def select_with_arrows(prompt_text: str, options: list[str]) -> int:
+    if not sys.stdin.isatty():
+        raise RuntimeError(f"Missing required value: {prompt_text}")
+
+    print(f"{prompt_text} (use arrow keys and Enter):")
+    selected_index = 0
+    render_arrow_menu(options, selected_index, redraw=False)
+
+    while True:
+        key = read_menu_key()
+        if key == "up":
+            selected_index = (selected_index - 1) % len(options)
+            render_arrow_menu(options, selected_index, redraw=True)
+            continue
+        if key == "down":
+            selected_index = (selected_index + 1) % len(options)
+            render_arrow_menu(options, selected_index, redraw=True)
+            continue
+        if key == "enter":
+            print()
+            return selected_index
+
+
+def list_available_aws_profiles() -> list[str]:
+    profiles: set[str] = set()
+    files = [
+        (Path(os.environ.get("AWS_CONFIG_FILE", Path.home() / ".aws" / "config")).expanduser(), True),
+        (
+            Path(os.environ.get("AWS_SHARED_CREDENTIALS_FILE", Path.home() / ".aws" / "credentials")).expanduser(),
+            False,
+        ),
+    ]
+
+    for path, from_config in files:
+        if not path.exists():
+            continue
+
+        parser = configparser.RawConfigParser()
+        parser.read(path, encoding="utf-8")
+        for section in parser.sections():
+            profile = normalize_profile_name(section, from_config=from_config)
+            if profile:
+                profiles.add(profile)
+
+    return sorted(profiles, key=str.lower)
+
+
+def get_gh_auth_status_text() -> str:
+    print_step("Checking GitHub CLI authentication status...")
+    result = run_command(["gh", "auth", "status"])
+    if result.returncode != 0:
+        message = (
+            f"Command failed ({result.returncode}): gh auth status\n"
+            f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+        )
+        raise RuntimeError(message)
+    return "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part).strip()
+
+
+def extract_gh_scopes(status_text: str) -> set[str]:
+    scopes: set[str] = set()
+    for line in status_text.splitlines():
+        if "Token scopes:" not in line:
+            continue
+        _, raw_scopes = line.split("Token scopes:", 1)
+        for scope in raw_scopes.replace("'", "").replace('"', "").split(","):
+            normalized = scope.strip()
+            if normalized:
+                scopes.add(normalized)
+    return scopes
+
+
+def ensure_gh_scope(required_scope: str) -> None:
+    status_text = get_gh_auth_status_text()
+    scopes = extract_gh_scopes(status_text)
+    if scopes and required_scope in scopes:
+        print_step(f"GitHub CLI scope '{required_scope}' is available.")
+        return
+    if sys.stdin.isatty():
+        print_step(f"GitHub CLI is missing scope '{required_scope}'. Starting `gh auth refresh`...")
+        run_command_live_checked(
+            ["gh", "auth", "refresh", "-h", "github.com", "-s", required_scope],
+            description=f"Refreshing GitHub CLI authentication to add scope '{required_scope}'...",
+        )
+        refreshed_status = get_gh_auth_status_text()
+        refreshed_scopes = extract_gh_scopes(refreshed_status)
+        if refreshed_scopes and required_scope in refreshed_scopes:
+            print_step(f"GitHub CLI scope '{required_scope}' is available after refresh.")
+            return
+        available_after_refresh = ", ".join(sorted(refreshed_scopes)) if refreshed_scopes else "unknown"
+        raise RuntimeError(
+            f"GitHub CLI still does not expose required scope '{required_scope}' after refresh. "
+            f"Available scopes: {available_after_refresh}."
+        )
+    if scopes:
+        available = ", ".join(sorted(scopes))
+        raise RuntimeError(
+            f"GitHub CLI is missing required scope '{required_scope}'. Available scopes: {available}. "
+            f"Run: gh auth refresh -h github.com -s {required_scope}"
+        )
+    print_step(
+        f"Could not confirm GitHub CLI scopes from `gh auth status`. "
+        f"If org variable updates fail, run: gh auth refresh -h github.com -s {required_scope}"
+    )
+
+
+def prompt_for_aws_profile(profiles: list[str]) -> str:
+    if not sys.stdin.isatty():
+        available = ", ".join(profiles) if profiles else "none found"
+        raise RuntimeError(
+            "Missing AWS profile. Set AWS_PROFILE, pass --aws-profile, or run interactively. "
+            f"Available profiles in {aws_config_dir()}: {available}."
+        )
+
+    print(f"AWS profile is not set. Available profiles in {aws_config_dir()}:")
+    if not profiles:
+        print("  No profiles found in config files.")
+        while True:
+            answer = input("AWS profile: ").strip()
+            if answer:
+                return answer
+            print("Value is required.")
+
+    selected_index = select_with_arrows("Select AWS profile", profiles)
+    return profiles[selected_index]
+
+
+def resolve_aws_profile(profile_arg: str) -> str:
+    explicit_profile = profile_arg.strip()
+    if explicit_profile:
+        return explicit_profile
+
+    env_profile = os.environ.get("AWS_PROFILE", "").strip()
+    if env_profile:
+        return env_profile
+
+    profiles = list_available_aws_profiles()
+    return prompt_for_aws_profile(profiles)
+
+
+def verify_cli_prerequisites(*, aws_profile: str) -> None:
+    os.environ["AWS_PROFILE"] = aws_profile
+    print_step(f"Using AWS profile '{aws_profile}'.")
+    run_command_checked(["terraform", "version"], description="Checking Terraform CLI...")
+    run_command_checked(["aws", "--version"], description="Checking AWS CLI...")
+    try:
+        run_command_checked(
+            ["aws", "sts", "get-caller-identity"],
+            description="Validating AWS credentials with STS GetCallerIdentity...",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"AWS authentication failed for profile '{aws_profile}'. "
+            f"Refresh credentials first (for SSO usually: aws sso login --profile {aws_profile}).\n{exc}"
+        ) from exc
+    run_command_checked(["gh", "--version"], description="Checking GitHub CLI...")
+    ensure_gh_scope("admin:org")
+
+
+def write_runtime_tfvars(*, org: str, repo: str, aws_region: str) -> str:
+    print_step("Preparing temporary Terraform variables for AWS prerequisite...")
+    content = "\n".join(
+        [
+            f'aws_region = "{aws_region}"',
+            f'github_org = "{org}"',
+            f'github_repo = "{repo}"',
+            "",
+        ]
+    )
+
+    with tempfile.NamedTemporaryFile("w", suffix=".auto.tfvars", encoding="utf-8", delete=False) as handle:
+        handle.write(content)
+        return handle.name
+
+
+def run_terraform(terraform_dir: Path, *, tfvars_path: str) -> dict[str, object]:
+    run_command_checked(
+        ["terraform", "init"],
+        cwd=terraform_dir,
+        description="Initializing Terraform for AWS prerequisite...",
+    )
+    run_command_checked(
+        ["terraform", "apply", "-auto-approve", f"-var-file={tfvars_path}"],
+        cwd=terraform_dir,
+        description="Applying Terraform for AWS prerequisite...",
+    )
+    output_raw = run_command_checked(
+        ["terraform", "output", "-json"],
+        cwd=terraform_dir,
+        description="Reading Terraform outputs for AWS prerequisite...",
+    )
+    return json.loads(output_raw)
+
+
+def get_aws_account_id() -> str:
+    return run_command_checked(
+        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+        description="Reading AWS account ID...",
+    ).strip()
+
+
+def set_variable(name: str, value: str, *, org: str, repo: str) -> None:
+    command = [
+        "gh",
+        "variable",
+        "set",
+        name,
+        "--body",
+        value,
+        "--org",
+        org,
+        "--visibility",
+        "selected",
+        "--repos",
+        repo,
+    ]
+    run_command_checked(
+        command,
+        description=f"Setting GitHub org variable '{name}' for repo '{org}/{repo}'...",
+    )
+
+
+def upsert_github_variables(*, org: str, repo: str, aws_region: str, aws_account_id: str, tf_state_bucket: str) -> list[str]:
+    changes: list[str] = []
+    variables = {
+        "AWS_REGION": aws_region,
+        "AWS_ACCOUNT_ID": aws_account_id,
+        "BOOTSTRAP_ROLE_NAME": DEFAULT_BOOTSTRAP_ROLE_NAME,
+        "TF_STATE_BUCKET": tf_state_bucket,
+    }
+
+    for name, value in variables.items():
+        set_variable(name, value, org=org, repo=repo)
+        changes.append(f"variable {name}")
+
+    return changes
+
+
+def main() -> int:
+    args = parse_args()
+    print_step(
+        f"Starting AWS prerequisite bootstrap for org='{args.org}', repo='{args.repo}', region='{args.aws_region}'."
+    )
+    aws_profile = resolve_aws_profile(args.aws_profile)
+    verify_cli_prerequisites(aws_profile=aws_profile)
+
+    base_dir = Path(__file__).resolve().parent
+    tfvars_path = write_runtime_tfvars(org=args.org, repo=args.repo, aws_region=args.aws_region)
+
+    try:
+        outputs = run_terraform(base_dir, tfvars_path=tfvars_path)
+    finally:
+        Path(tfvars_path).unlink(missing_ok=True)
+
+    tf_state_bucket = str(outputs["tf_state_bucket"]["value"]).strip()
+    if not tf_state_bucket:
+        raise RuntimeError("Missing tf_state_bucket output after Terraform apply.")
+
+    aws_account_id = get_aws_account_id()
+    changes = upsert_github_variables(
+        org=args.org,
+        repo=args.repo,
+        aws_region=args.aws_region,
+        aws_account_id=aws_account_id,
+        tf_state_bucket=tf_state_bucket,
+    )
+
+    print("\nbootstrap-aws-prerequisite summary:")
+    print(f"- org: {args.org}")
+    print(f"- repo: {args.repo}")
+    print(f"- aws_region: {args.aws_region}")
+    print(f"- aws_profile: {aws_profile}")
+    print(f"- aws_account_id: {aws_account_id}")
+    print(f"- bootstrap_role_name: {DEFAULT_BOOTSTRAP_ROLE_NAME}")
+    print(f"- tf_state_bucket: {tf_state_bucket}")
+    print(f"- tf_lock_table: {DEFAULT_LOCK_TABLE_NAME}")
+    for change in changes:
+        print(f"- upsert {change}")
+
+    print("\nDone.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        raise SystemExit(1)

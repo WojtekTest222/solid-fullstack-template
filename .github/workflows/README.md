@@ -21,10 +21,11 @@ Uruchamiasz jeden workflow `workflow_dispatch`, a on wykonuje pelny lancuch:
 ### Wymagane Variables
 
 - `AWS_REGION`
-- `AWS_ROLE_TO_ASSUME`
+- `AWS_ACCOUNT_ID`
+- `BOOTSTRAP_ROLE_NAME`
 - `TF_STATE_BUCKET`
-- `TF_LOCK_TABLE`
-- opcjonalnie `TF_STATE_KEY_PREFIX`
+
+Alternatywnie zamiast `AWS_ACCOUNT_ID` + `BOOTSTRAP_ROLE_NAME` mozesz ustawic `AWS_ROLE_TO_ASSUME`.
 
 ### Wymagane Secrets
 

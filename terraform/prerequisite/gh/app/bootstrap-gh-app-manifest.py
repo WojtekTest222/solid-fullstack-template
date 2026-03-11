@@ -13,11 +13,13 @@ Flow:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
 import html
 import json
 import secrets
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +43,10 @@ def green(text: str) -> str:
     if not supports_color():
         return text
     return f"{ANSI_GREEN}{text}{ANSI_RESET}"
+
+
+def format_local_time(value: datetime) -> str:
+    return value.astimezone().strftime("%H:%M:%S")
 
 
 class CallbackServer(ThreadingHTTPServer):
@@ -148,7 +154,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--callback-path", default="/callback", help="Local callback path")
     parser.add_argument("--timeout-seconds", type=int, default=600, help="Callback wait timeout")
     parser.add_argument("--output-dir", default=".", help="Directory to write output files")
-    parser.add_argument("--open-browser", action="store_true", help="Open browser automatically")
+    browser_group = parser.add_mutually_exclusive_group()
+    browser_group.add_argument(
+        "--open-browser",
+        dest="open_browser",
+        action="store_true",
+        help="Open browser automatically (default)",
+    )
+    browser_group.add_argument(
+        "--no-open-browser",
+        dest="open_browser",
+        action="store_false",
+        help="Do not open browser automatically",
+    )
+    parser.set_defaults(open_browser=True)
     return parser.parse_args()
 
 
@@ -227,6 +246,26 @@ def write_output_files(output_dir: Path, response: dict[str, Any]) -> tuple[Path
     return key_file, json_file
 
 
+def wait_for_callback(server: CallbackServer, redirect_url: str, timeout_seconds: int) -> None:
+    started_at = datetime.now().astimezone()
+    timeout_at = started_at + timedelta(seconds=timeout_seconds)
+
+    print(
+        f"Waiting for callback on {redirect_url} "
+        f"(now: {format_local_time(started_at)}, timeout at: {format_local_time(timeout_at)})..."
+    )
+    print("Press Ctrl+C to cancel.")
+
+    deadline_monotonic = time.monotonic() + timeout_seconds
+    poll_interval_seconds = 0.25
+
+    while True:
+        if server.event.wait(timeout=poll_interval_seconds):
+            return
+        if time.monotonic() >= deadline_monotonic:
+            raise RuntimeError("Timed out waiting for callback.")
+
+
 def run() -> int:
     args = parse_args()
     callback_path = args.callback_path if args.callback_path.startswith("/") else f"/{args.callback_path}"
@@ -264,13 +303,11 @@ def run() -> int:
     else:
         print("Open the local auto-submit URL in your browser.")
 
-    print(f"Waiting for callback on {redirect_url} (timeout: {args.timeout_seconds}s)...")
-    if not server.event.wait(timeout=args.timeout_seconds):
+    try:
+        wait_for_callback(server, redirect_url, args.timeout_seconds)
+    finally:
         server.shutdown()
-        raise RuntimeError("Timed out waiting for callback.")
-
-    server.shutdown()
-    thread.join(timeout=2)
+        thread.join(timeout=2)
 
     if server.error:
         raise RuntimeError(server.error)

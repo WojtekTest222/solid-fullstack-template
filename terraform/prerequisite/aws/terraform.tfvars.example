@@ -1,20 +1,11 @@
 aws_region            = "eu-central-1"
 github_org            = "<GITHUB_ORG>"
-# Optional. If empty, trust policy allows all repos in github_org.
 github_repo           = "<GITHUB_REPO>"
-github_oidc_role_name = "gha-bootstrap-org"
-organization_account_access_role_name = "OrganizationAccountAccessRole"
-# Optional. If non-empty, role access to state objects is limited to this prefix.
-tf_state_key_prefix   = "bootstrap-org"
-# Optional. If empty, defaults to tfstate-<ACCOUNT_ID>-<REGION>.
-tf_state_bucket_name  = "<TF_STATE_BUCKET_NAME>"
-# Optional. If empty, defaults to terraform-locks.
-tf_lock_table_name    = "<TF_LOCK_TABLE_NAME>"
+
 # Optional. If OIDC provider already exists, set ARN and Terraform will reuse it.
 # github_oidc_provider_arn = "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
 # Optional. Override trust patterns; default comes from github_org/github_repo.
 # github_subject_patterns = ["repo:<GITHUB_ORG>/<GITHUB_REPO>:*"]
-# debug_suffix  = "dbg01"
 
 tags = {
   Environment = "prerequisite-aws"

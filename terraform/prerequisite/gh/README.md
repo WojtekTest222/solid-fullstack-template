@@ -5,7 +5,7 @@ Ten krok wykonujesz raz na organizacje GitHub.
 Etap 0 sklada sie z trzech czesci:
 - `app/` - tworzenie GitHub App przez manifest flow,
 - `team/` - idempotentne zapewnienie teamu `administrators`,
-- `bootstrap-gh.py` - lokalny orchestrator, ktory spina oba kroki i od razu ustawia bootstrapowe secrets/variables.
+- `bootstrap-gh.py` - lokalny orchestrator, ktory spina oba kroki i od razu ustawia sekrety GitHub App.
 
 ## 1. Wymagania
 
@@ -15,6 +15,11 @@ Etap 0 sklada sie z trzech czesci:
    gh auth status
    ```
 1. Uprawnienia do tworzenia GitHub App i zarzadzania teamami/repo variables/secrets.
+1. Token `gh` powinien miec zakres `admin:org`:
+   ```ps1
+   gh auth refresh -h github.com -s admin:org
+   ```
+   Skrypt sprobuje odpalic ten refresh automatycznie, jesli scope bedzie brakowal.
 
 ## 2. Szybki start (zalecane)
 
@@ -25,13 +30,7 @@ python bootstrap-gh.py `
   --org KnightRadiants `
   --bootstrap-repo solid-fullstack-template-manual `
   --scope org `
-  --app-name "gha-template-bootstrap" `
-  --app-description "Bootstrap app for template governance" `
-  --open-browser `
-  --aws-region "eu-central-1" `
-  --aws-role-to-assume "arn:aws:iam::123456789012:role/gha-bootstrap-org" `
-  --tf-state-bucket "tfstate-123456789012-eu-central-1" `
-  --tf-lock-table "terraform-locks"
+  --app-description "Bootstrap app for template governance"
 ```
 
 Co zrobi orchestrator:
@@ -40,13 +39,15 @@ Co zrobi orchestrator:
 1. Ustawi:
    - `GH_APP_ID` (secret)
    - `GH_APP_PRIVATE_KEY` (secret)
-   - `AWS_REGION` (variable, jesli podano)
-   - `AWS_ROLE_TO_ASSUME` (variable, jesli podano)
-   - `TF_STATE_BUCKET` (variable, jesli podano)
-   - `TF_LOCK_TABLE` (variable, jesli podano)
-   - `TF_STATE_KEY_PREFIX` (variable, opcjonalnie)
 
 Przy `--scope org` wartosci sa zapisywane jako org-level i ograniczone do `--bootstrap-repo` (`visibility=selected`).
+Nazwa Appki jest domyslnie skladana wedlug konwencji `gha-<pierwsze-20-znakow-org>-<hash6>`.
+Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danej organizacji, wiec kolejne uruchomienia moga skipnac tworzenie Appki.
+Jesli lokalne credentials dla takiej nazwy juz istnieja w `app/out`, skrypt pominie tworzenie Appki i je zre-uzyje.
+Jesli pominiesz `--app-name`, skrypt pokaze Appki znalezione lokalnie w `app/out` dla danej organizacji i pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z organizacji.
+Przegladarka dla manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
+
+Zmienne AWS bootstrapowe ustawia osobno [../aws/bootstrap-aws.py](../aws/bootstrap-aws.py).
 
 ## 3. Tryb reczny
 

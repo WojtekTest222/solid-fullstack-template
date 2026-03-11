@@ -105,8 +105,6 @@ jobs:
                   VAR_BOOTSTRAP_ROLE_NAME: ${{ vars.BOOTSTRAP_ROLE_NAME }}
                   VAR_AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
                   VAR_TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-                  VAR_TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
-                  VAR_TF_STATE_KEY_PREFIX: ${{ vars.TF_STATE_KEY_PREFIX }}
               run: |
                   set -euo pipefail
 
@@ -126,11 +124,6 @@ jobs:
                     exit 1
                   fi
 
-                  if [[ -z "${VAR_TF_LOCK_TABLE}" ]]; then
-                    echo "::error::Missing variable TF_LOCK_TABLE."
-                    exit 1
-                  fi
-
                   if [[ -n "${VAR_AWS_ROLE_TO_ASSUME}" ]]; then
                     ROLE_ARN="${VAR_AWS_ROLE_TO_ASSUME}"
                   else
@@ -141,15 +134,14 @@ jobs:
                     ROLE_ARN="arn:aws:iam::${VAR_AWS_ACCOUNT_ID}:role/${VAR_BOOTSTRAP_ROLE_NAME}"
                   fi
 
-                  STATE_PREFIX="${VAR_TF_STATE_KEY_PREFIX:-bootstrap-org}"
-                  STATE_PREFIX="${STATE_PREFIX#/}"
-                  STATE_PREFIX="${STATE_PREFIX%/}"
+                  TF_LOCK_TABLE="terraform-locks"
+                  STATE_PREFIX="bootstrap-org"
                   STATE_KEY="${STATE_PREFIX}/${{ inputs.app_slug }}.tfstate"
 
                   echo "aws_region=${AWS_REGION}" >> "$GITHUB_OUTPUT"
                   echo "role_arn=${ROLE_ARN}" >> "$GITHUB_OUTPUT"
                   echo "tf_state_bucket=${VAR_TF_STATE_BUCKET}" >> "$GITHUB_OUTPUT"
-                  echo "tf_lock_table=${VAR_TF_LOCK_TABLE}" >> "$GITHUB_OUTPUT"
+                  echo "tf_lock_table=${TF_LOCK_TABLE}" >> "$GITHUB_OUTPUT"
                   echo "state_key=${STATE_KEY}" >> "$GITHUB_OUTPUT"
 
             - name: Configure AWS credentials (OIDC)

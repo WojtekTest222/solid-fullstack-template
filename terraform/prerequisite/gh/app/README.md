@@ -10,13 +10,14 @@ python app/bootstrap-gh-app-manifest.py `
   --org KnightRadiants `
   --app-name "gha-template-bootstrap" `
   --description "Bootstrap app for template governance" `
-  --output-dir "./app/out" `
-  --open-browser
+  --output-dir "./app/out"
 ```
 
 Po zatwierdzeniu w przegladarce skrypt zapisze:
 - `app/out/github-app-<APP_ID>.private-key.pem`
 - `app/out/github-app-<APP_ID>.credentials.json`
+
+Przegladarka otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 
 ## Wymagane permissiony appki
 

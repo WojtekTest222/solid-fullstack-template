@@ -4,17 +4,18 @@ Template do szybkiego startu aplikacji z bootstrapem AWS Organizations + IAM + g
 
 ## 1. One-time prerequisite (na AWS management account + GitHub org)
 
-1. Wykonaj AWS prerequisite:
+1. Wykonaj wspolny prerequisite orchestrator:
+   - [terraform/prerequisite/README.md](terraform/prerequisite/README.md)
+1. Jesli nie uzywasz wspolnego orchestratora, masz osobne kroki:
    - [terraform/prerequisite/aws/README.md](terraform/prerequisite/aws/README.md)
-1. Wykonaj GitHub prerequisite (GitHub App + team + bootstrap secrets/variables):
    - [terraform/prerequisite/gh/README.md](terraform/prerequisite/gh/README.md)
-1. Jesli nie ustawiles ich przez `bootstrap-gh.py`, ustaw GitHub Variables (repo lub org):
+1. Jesli nie ustawiles ich przez `bootstrap-aws.py` albo `bootstrap.py`, ustaw GitHub Variables (repo lub org):
    - `AWS_REGION`
-   - `AWS_ROLE_TO_ASSUME`
+   - `AWS_ACCOUNT_ID`
+   - `BOOTSTRAP_ROLE_NAME`
    - `TF_STATE_BUCKET`
-   - `TF_LOCK_TABLE`
-   - opcjonalnie `TF_STATE_KEY_PREFIX` (domyslnie workflow uzywa `bootstrap-org`)
-1. Jesli nie ustawiles ich przez `bootstrap-gh.py`, ustaw GitHub Secrets (repo lub org):
+   - alternatywnie: `AWS_ROLE_TO_ASSUME`
+1. Jesli nie ustawiles ich przez `bootstrap-gh.py` albo `bootstrap.py`, ustaw GitHub Secrets (repo lub org):
    - `GH_APP_ID`
    - `GH_APP_PRIVATE_KEY`
 

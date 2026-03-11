@@ -1,11 +1,11 @@
 locals {
-  github_oidc_url = "https://token.actions.githubusercontent.com"
+  github_oidc_url     = "https://token.actions.githubusercontent.com"
+  tf_state_key_prefix = "bootstrap-org"
 
-  default_github_subject              = var.github_repo != "" ? "repo:${var.github_org}/${var.github_repo}:*" : "repo:${var.github_org}/*"
+  default_github_subject              = "repo:${var.github_org}/${var.github_repo}:*"
   effective_github_subject_patterns   = length(var.github_subject_patterns) > 0 ? var.github_subject_patterns : [local.default_github_subject]
   effective_github_oidc_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
-  tf_state_key_prefix_trimmed         = trim(var.tf_state_key_prefix, "/")
-  effective_tf_state_object_arn_scope = local.tf_state_key_prefix_trimmed == "" ? "${aws_s3_bucket.tf_state.arn}/*" : "${aws_s3_bucket.tf_state.arn}/${local.tf_state_key_prefix_trimmed}/*"
+  effective_tf_state_object_arn_scope = "${aws_s3_bucket.tf_state.arn}/${local.tf_state_key_prefix}/*"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {

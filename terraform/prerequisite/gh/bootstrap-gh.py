@@ -5,27 +5,53 @@ Local orchestrator for GitHub prerequisite bootstrap.
 Stage order:
 1) Ensure GitHub App credentials (create once, then reuse from app/out).
 2) Ensure administrators team baseline.
-3) Upsert required bootstrap secrets/variables via gh CLI.
+3) Upsert required GitHub App secrets via gh CLI.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+DEFAULT_APP_PREFIX = "gha"
+MAX_GITHUB_APP_NAME_LENGTH = 34
+DEFAULT_ORG_SEGMENT_LENGTH = 20
+DEFAULT_APP_SUFFIX_LENGTH = 6
+
+
+def print_step(message: str) -> None:
+    print(f"[INFO] {message}", flush=True)
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=True, check=False)
 
 
-def run_command_checked(command: list[str]) -> str:
+def run_command_live_checked(command: list[str], *, description: str = "") -> None:
+    if description:
+        print_step(description)
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0:
+        message = (
+            f"{description}\n" if description else ""
+        ) + f"Command failed ({result.returncode}): {' '.join(command)}"
+        raise RuntimeError(message)
+
+
+def run_command_checked(command: list[str], *, description: str = "") -> str:
+    if description:
+        print_step(description)
     result = run_command(command)
     if result.returncode != 0:
         message = (
+            f"{description}\n" if description else ""
+        ) + (
             f"Command failed ({result.returncode}): {' '.join(command)}\n"
             f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
         )
@@ -40,17 +66,125 @@ def slugify(value: str) -> str:
     return slug
 
 
+def build_default_app_name(org: str) -> str:
+    org_slug = slugify(org)
+    org_segment = org_slug[:DEFAULT_ORG_SEGMENT_LENGTH].strip("-") or "org"
+    suffix = hashlib.sha1(org.strip().lower().encode("utf-8")).hexdigest()[:DEFAULT_APP_SUFFIX_LENGTH]
+    app_name = f"{DEFAULT_APP_PREFIX}-{org_segment}-{suffix}"
+    return app_name[:MAX_GITHUB_APP_NAME_LENGTH].strip("-")
+
+
+def prompt_with_default(value: str, prompt_text: str, *, default: str = "") -> str:
+    normalized = value.strip()
+    if normalized:
+        return normalized
+
+    if not sys.stdin.isatty():
+        if default:
+            return default
+        raise RuntimeError(f"Missing required value: {prompt_text}")
+
+    suffix = f" [{default}]" if default else ""
+    while True:
+        answer = input(f"{prompt_text}{suffix}: ").strip()
+        if answer:
+            return answer
+        if default:
+            return default
+        print("Value is required.")
+
+
+def read_menu_key() -> str:
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            char = msvcrt.getwch()
+            if char in ("\x00", "\xe0"):
+                extended = msvcrt.getwch()
+                if extended == "H":
+                    return "up"
+                if extended == "P":
+                    return "down"
+                continue
+            if char == "\r":
+                return "enter"
+            if char == "\x03":
+                raise KeyboardInterrupt
+            continue
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        char = sys.stdin.read(1)
+        if char in ("\r", "\n"):
+            return "enter"
+        if char == "\x03":
+            raise KeyboardInterrupt
+        if char == "\x1b":
+            next_char = sys.stdin.read(1)
+            if next_char == "[":
+                final_char = sys.stdin.read(1)
+                if final_char == "A":
+                    return "up"
+                if final_char == "B":
+                    return "down"
+        return ""
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def render_arrow_menu(options: list[str], selected_index: int, *, redraw: bool) -> None:
+    if redraw:
+        sys.stdout.write(f"\x1b[{len(options)}A")
+    for index, option in enumerate(options):
+        prefix = "> " if index == selected_index else "  "
+        sys.stdout.write(f"\r{prefix}{option}\x1b[K\n")
+    sys.stdout.flush()
+
+
+def select_with_arrows(prompt_text: str, options: list[str]) -> int:
+    if not sys.stdin.isatty():
+        raise RuntimeError(f"Missing required value: {prompt_text}")
+
+    print(f"{prompt_text} (use arrow keys and Enter):")
+    selected_index = 0
+    render_arrow_menu(options, selected_index, redraw=False)
+
+    while True:
+        key = read_menu_key()
+        if key == "up":
+            selected_index = (selected_index - 1) % len(options)
+            render_arrow_menu(options, selected_index, redraw=True)
+            continue
+        if key == "down":
+            selected_index = (selected_index + 1) % len(options)
+            render_arrow_menu(options, selected_index, redraw=True)
+            continue
+        if key == "enter":
+            print()
+            return selected_index
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Bootstrap GitHub prerequisite (app + team + configuration).")
+    parser = argparse.ArgumentParser(description="Bootstrap GitHub prerequisite (app + team + app secrets).")
     parser.add_argument("--org", required=True, help="GitHub organization")
-    parser.add_argument("--bootstrap-repo", required=True, help="Repository name that receives bootstrap settings")
+    parser.add_argument("--bootstrap-repo", required=True, help="Repository name that receives app secrets")
     parser.add_argument(
         "--scope",
         choices=["org", "repo"],
         default="org",
-        help="Where to write GH_APP_* and bootstrap vars",
+        help="Where to write GH_APP_* secrets",
     )
-    parser.add_argument("--app-name", default="gha-template-bootstrap", help="GitHub App name")
+    parser.add_argument(
+        "--app-name",
+        default="",
+        help="GitHub App name override; if omitted, generated as gha-<org20>-<hash6>",
+    )
     parser.add_argument(
         "--app-description",
         default="Bootstrap app for template governance",
@@ -58,7 +192,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--homepage-url", default="", help="Optional app homepage URL")
     parser.add_argument("--output-dir", default="app/out", help="Directory for app credentials output")
-    parser.add_argument("--open-browser", action="store_true", help="Open browser for manifest flow")
+    browser_group = parser.add_mutually_exclusive_group()
+    browser_group.add_argument(
+        "--open-browser",
+        dest="open_browser",
+        action="store_true",
+        help="Open browser for manifest flow (default)",
+    )
+    browser_group.add_argument(
+        "--no-open-browser",
+        dest="open_browser",
+        action="store_false",
+        help="Do not open browser automatically for manifest flow",
+    )
+    parser.set_defaults(open_browser=True)
     parser.add_argument("--force-create-app", action="store_true", help="Force creating a new app")
 
     parser.add_argument("--team-name", default="administrators", help="Administrators team name")
@@ -75,31 +222,77 @@ def parse_args() -> argparse.Namespace:
         help="Skip granting admin permission on bootstrap repo to administrators team",
     )
 
-    parser.add_argument("--aws-region", default="", help="Value for AWS_REGION variable")
-    parser.add_argument("--aws-role-to-assume", default="", help="Value for AWS_ROLE_TO_ASSUME variable")
-    parser.add_argument("--tf-state-bucket", default="", help="Value for TF_STATE_BUCKET variable")
-    parser.add_argument("--tf-lock-table", default="", help="Value for TF_LOCK_TABLE variable")
-    parser.add_argument("--tf-state-key-prefix", default="", help="Optional TF_STATE_KEY_PREFIX variable")
     return parser.parse_args()
 
 
-def find_existing_credentials(output_dir: Path, app_name: str) -> tuple[Path, Path, dict] | None:
-    expected_slug = slugify(app_name)
-    candidates: list[tuple[float, Path, Path, dict]] = []
+def get_gh_auth_status_text() -> str:
+    print_step("Checking GitHub CLI authentication status...")
+    result = run_command(["gh", "auth", "status"])
+    if result.returncode != 0:
+        message = (
+            f"Command failed ({result.returncode}): gh auth status\n"
+            f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
+        )
+        raise RuntimeError(message)
+    return "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part).strip()
 
+
+def extract_gh_scopes(status_text: str) -> set[str]:
+    scopes: set[str] = set()
+    for line in status_text.splitlines():
+        if "Token scopes:" not in line:
+            continue
+        _, raw_scopes = line.split("Token scopes:", 1)
+        for scope in raw_scopes.replace("'", "").replace('"', "").split(","):
+            normalized = scope.strip()
+            if normalized:
+                scopes.add(normalized)
+    return scopes
+
+
+def ensure_gh_scope(required_scope: str) -> None:
+    status_text = get_gh_auth_status_text()
+    scopes = extract_gh_scopes(status_text)
+    if scopes and required_scope in scopes:
+        print_step(f"GitHub CLI scope '{required_scope}' is available.")
+        return
+    if sys.stdin.isatty():
+        print_step(f"GitHub CLI is missing scope '{required_scope}'. Starting `gh auth refresh`...")
+        run_command_live_checked(
+            ["gh", "auth", "refresh", "-h", "github.com", "-s", required_scope],
+            description=f"Refreshing GitHub CLI authentication to add scope '{required_scope}'...",
+        )
+        refreshed_status = get_gh_auth_status_text()
+        refreshed_scopes = extract_gh_scopes(refreshed_status)
+        if refreshed_scopes and required_scope in refreshed_scopes:
+            print_step(f"GitHub CLI scope '{required_scope}' is available after refresh.")
+            return
+        available_after_refresh = ", ".join(sorted(refreshed_scopes)) if refreshed_scopes else "unknown"
+        raise RuntimeError(
+            f"GitHub CLI still does not expose required scope '{required_scope}' after refresh. "
+            f"Available scopes: {available_after_refresh}."
+        )
+    if scopes:
+        available = ", ".join(sorted(scopes))
+        raise RuntimeError(
+            f"GitHub CLI is missing required scope '{required_scope}'. Available scopes: {available}. "
+            f"Run: gh auth refresh -h github.com -s {required_scope}"
+        )
+    print_step(
+        f"Could not confirm GitHub CLI scopes from `gh auth status`. "
+        f"If org administration calls fail, run: gh auth refresh -h github.com -s {required_scope}"
+    )
+
+
+def collect_credentials_bundles(output_dir: Path) -> list[tuple[float, Path, Path, dict]]:
+    candidates: list[tuple[float, Path, Path, dict]] = []
     for credentials_file in output_dir.glob("github-app-*.credentials.json"):
         try:
             data = json.loads(credentials_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
-
-        app_slug = str(data.get("slug", "")).strip().lower()
-        app_display_name = str(data.get("name", "")).strip()
         app_id = data.get("id")
         if not app_id:
-            continue
-
-        if app_display_name != app_name and app_slug != expected_slug:
             continue
 
         private_key_file = output_dir / f"github-app-{app_id}.private-key.pem"
@@ -108,12 +301,131 @@ def find_existing_credentials(output_dir: Path, app_name: str) -> tuple[Path, Pa
 
         candidates.append((credentials_file.stat().st_mtime, credentials_file, private_key_file, data))
 
-    if not candidates:
-        return None
-
     candidates.sort(key=lambda item: item[0], reverse=True)
-    _, credentials, private_key, payload = candidates[0]
-    return credentials, private_key, payload
+    return candidates
+
+
+def snapshot_credentials_state(output_dir: Path) -> dict[str, float]:
+    return {
+        str(credentials_file.resolve()): credentials_file.stat().st_mtime
+        for _, credentials_file, _, _ in collect_credentials_bundles(output_dir)
+    }
+
+
+def find_existing_credentials(
+    output_dir: Path,
+    app_name: str,
+    *,
+    owner: str = "",
+) -> tuple[Path, Path, dict] | None:
+    expected_slug = slugify(app_name)
+    expected_owner = owner.strip().lower()
+
+    for _, credentials_file, private_key_file, data in collect_credentials_bundles(output_dir):
+        app_slug = str(data.get("slug", "")).strip().lower()
+        app_display_name = str(data.get("name", "")).strip()
+        owner_login = str(data.get("owner", {}).get("login", "")).strip().lower()
+
+        if expected_owner and owner_login != expected_owner:
+            continue
+        if app_display_name != app_name and app_slug != expected_slug:
+            continue
+        return credentials_file, private_key_file, data
+
+    return None
+
+
+def find_recent_credentials(
+    output_dir: Path,
+    *,
+    owner: str = "",
+    previous_state: dict[str, float] | None = None,
+) -> tuple[Path, Path, dict] | None:
+    expected_owner = owner.strip().lower()
+    previous_state = previous_state or {}
+
+    for modified_at, credentials_file, private_key_file, data in collect_credentials_bundles(output_dir):
+        owner_login = str(data.get("owner", {}).get("login", "")).strip().lower()
+        current_key = str(credentials_file.resolve())
+        previous_mtime = previous_state.get(current_key)
+
+        if expected_owner and owner_login != expected_owner:
+            continue
+        if previous_mtime is not None and modified_at <= previous_mtime:
+            continue
+        return credentials_file, private_key_file, data
+
+    return None
+
+
+def list_known_credentials(output_dir: Path, *, owner: str = "") -> list[tuple[Path, Path, dict]]:
+    expected_owner = owner.strip().lower()
+    bundles: list[tuple[Path, Path, dict]] = []
+
+    for _, credentials_file, private_key_file, data in collect_credentials_bundles(output_dir):
+        owner_login = str(data.get("owner", {}).get("login", "")).strip().lower()
+        if expected_owner and owner_login != expected_owner:
+            continue
+        bundles.append((credentials_file, private_key_file, data))
+
+    return bundles
+
+
+def format_app_option(payload: dict) -> str:
+    name = str(payload.get("name", "")).strip() or "(unnamed)"
+    slug = str(payload.get("slug", "")).strip() or "n/a"
+    app_id = str(payload.get("id", "")).strip() or "n/a"
+    return f"{name} [id {app_id}, slug {slug}]"
+
+
+def resolve_app_target(
+    *,
+    output_dir: Path,
+    owner: str,
+    requested_app_name: str,
+    force_create_app: bool,
+) -> tuple[str, tuple[Path, Path, dict] | None]:
+    target_app_name = requested_app_name.strip() or build_default_app_name(owner)
+    known_credentials = list_known_credentials(output_dir, owner=owner)
+
+    if not force_create_app:
+        conventional_bundle = find_existing_credentials(output_dir, target_app_name, owner=owner)
+        if conventional_bundle:
+            print_step(f"Reusing GitHub App matching expected name: {target_app_name}.")
+            return target_app_name, conventional_bundle
+
+    if force_create_app:
+        app_name = prompt_with_default(target_app_name, "New GitHub App name", default=target_app_name)
+        return app_name, None
+
+    if requested_app_name.strip():
+        return target_app_name, None
+
+    if not sys.stdin.isatty():
+        if len(known_credentials) == 1:
+            _, _, payload = known_credentials[0]
+            actual_name = str(payload.get("name", "")).strip() or target_app_name
+            print_step(f"Reusing the only known GitHub App credentials for this org: {actual_name}.")
+            return actual_name, known_credentials[0]
+        if len(known_credentials) > 1:
+            raise RuntimeError(
+                "Multiple local GitHub App credentials exist for this org. "
+                "Pass --app-name to select one explicitly."
+            )
+        return target_app_name, None
+
+    if known_credentials:
+        option_labels = [format_app_option(payload) for _, _, payload in known_credentials]
+        option_labels.append(f"Create new GitHub App [{target_app_name}]")
+        selected_index = select_with_arrows("Select GitHub App", option_labels)
+        if selected_index < len(known_credentials):
+            _, _, payload = known_credentials[selected_index]
+            actual_name = str(payload.get("name", "")).strip() or target_app_name
+            print_step(f"Selected existing GitHub App: {actual_name}.")
+            return actual_name, known_credentials[selected_index]
+
+    app_name = prompt_with_default(target_app_name, "New GitHub App name", default=target_app_name)
+    return app_name, None
 
 
 def run_app_bootstrap(
@@ -141,7 +453,7 @@ def run_app_bootstrap(
         command.extend(["--homepage-url", homepage_url.strip()])
     if open_browser:
         command.append("--open-browser")
-    run_command_checked(command)
+    run_command_live_checked(command, description="Creating GitHub App via manifest flow...")
 
 
 def split_csv(raw_value: str) -> list[str]:
@@ -174,7 +486,7 @@ def ensure_team(
         command.extend(["--members", members.strip()])
     if admin_repo:
         command.extend(["--admin-repos", admin_repo])
-    run_command_checked(command)
+    run_command_checked(command, description="Ensuring administrators team baseline...")
 
 
 def set_secret(name: str, value: str, *, scope: str, org: str, repo: str) -> None:
@@ -183,30 +495,16 @@ def set_secret(name: str, value: str, *, scope: str, org: str, repo: str) -> Non
         command.extend(["--repo", f"{org}/{repo}"])
     else:
         command.extend(["--org", org, "--visibility", "selected", "--repos", repo])
-    run_command_checked(command)
+    run_command_checked(command, description=f"Setting GitHub secret '{name}'...")
 
 
-def set_variable(name: str, value: str, *, scope: str, org: str, repo: str) -> None:
-    command = ["gh", "variable", "set", name, "--body", value]
-    if scope == "repo":
-        command.extend(["--repo", f"{org}/{repo}"])
-    else:
-        command.extend(["--org", org, "--visibility", "selected", "--repos", repo])
-    run_command_checked(command)
-
-
-def upsert_bootstrap_configuration(
+def upsert_bootstrap_secrets(
     *,
     scope: str,
     org: str,
     repo: str,
     app_id: str,
     private_key_pem: str,
-    aws_region: str,
-    aws_role_to_assume: str,
-    tf_state_bucket: str,
-    tf_lock_table: str,
-    tf_state_key_prefix: str,
 ) -> list[str]:
     changes: list[str] = []
 
@@ -216,29 +514,17 @@ def upsert_bootstrap_configuration(
     set_secret("GH_APP_PRIVATE_KEY", private_key_pem, scope=scope, org=org, repo=repo)
     changes.append("secret GH_APP_PRIVATE_KEY")
 
-    variables = {
-        "AWS_REGION": aws_region.strip(),
-        "AWS_ROLE_TO_ASSUME": aws_role_to_assume.strip(),
-        "TF_STATE_BUCKET": tf_state_bucket.strip(),
-        "TF_LOCK_TABLE": tf_lock_table.strip(),
-        "TF_STATE_KEY_PREFIX": tf_state_key_prefix.strip(),
-    }
-    for name, value in variables.items():
-        if not value:
-            continue
-        set_variable(name, value, scope=scope, org=org, repo=repo)
-        changes.append(f"variable {name}")
-
     return changes
 
 
 def verify_cli_prerequisites() -> None:
-    run_command_checked(["gh", "--version"])
-    run_command_checked(["gh", "auth", "status"])
+    run_command_checked(["gh", "--version"], description="Checking GitHub CLI...")
+    ensure_gh_scope("admin:org")
 
 
 def main() -> int:
     args = parse_args()
+    print_step(f"Starting GitHub prerequisite bootstrap for org='{args.org}', repo='{args.bootstrap_repo}'.")
     verify_cli_prerequisites()
 
     base_dir = Path(__file__).resolve().parent
@@ -246,22 +532,47 @@ def main() -> int:
     app_script = base_dir / "app" / "bootstrap-gh-app-manifest.py"
     team_script = base_dir / "team" / "bootstrap-gh-team.py"
 
-    credentials_bundle = None if args.force_create_app else find_existing_credentials(output_dir, args.app_name)
+    app_name, credentials_bundle = resolve_app_target(
+        output_dir=output_dir,
+        owner=args.org,
+        requested_app_name=args.app_name,
+        force_create_app=args.force_create_app,
+    )
+
     if credentials_bundle:
         credentials_file, private_key_file, payload = credentials_bundle
+        print_step("Reusing existing GitHub App credentials from disk.")
         print(f"Reusing existing app credentials: {credentials_file}")
     else:
-        print("Creating GitHub App credentials via manifest flow...")
+        previous_state = snapshot_credentials_state(output_dir)
         run_app_bootstrap(
-            app_script_path=app_script,
+            script_path=app_script,
             org=args.org,
-            app_name=args.app_name,
+            app_name=app_name,
             app_description=args.app_description,
             homepage_url=args.homepage_url,
             output_dir=output_dir,
             open_browser=args.open_browser,
         )
-        credentials_bundle = find_existing_credentials(output_dir, args.app_name)
+        credentials_bundle = find_existing_credentials(
+            output_dir,
+            app_name,
+            owner=args.org,
+        )
+        if not credentials_bundle:
+            credentials_bundle = find_recent_credentials(
+                output_dir,
+                owner=args.org,
+                previous_state=previous_state,
+            )
+            if credentials_bundle:
+                _, _, recent_payload = credentials_bundle
+                actual_name = str(recent_payload.get("name", "")).strip()
+                actual_slug = str(recent_payload.get("slug", "")).strip()
+                print_step(
+                    "Detected newly created GitHub App credentials with a different name than requested: "
+                    f"name='{actual_name}', slug='{actual_slug}'."
+                )
         if not credentials_bundle:
             raise RuntimeError(
                 "Unable to locate created credentials in output directory. "
@@ -283,17 +594,12 @@ def main() -> int:
         admin_repo=grant_admin_repo,
     )
 
-    changes = upsert_bootstrap_configuration(
+    changes = upsert_bootstrap_secrets(
         scope=args.scope,
         org=args.org,
         repo=args.bootstrap_repo,
         app_id=app_id,
         private_key_pem=private_key_pem,
-        aws_region=args.aws_region,
-        aws_role_to_assume=args.aws_role_to_assume,
-        tf_state_bucket=args.tf_state_bucket,
-        tf_lock_table=args.tf_lock_table,
-        tf_state_key_prefix=args.tf_state_key_prefix,
     )
 
     print("\nbootstrap-gh-prerequisite summary:")
