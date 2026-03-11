@@ -35,11 +35,10 @@ Przy starcie skrypt probuje tez zsynchronizowac zapisane credentials Appki z AWS
 Jesli takie zapisane credentials wskazuja Appke, ktora zostala juz usunieta z GitHuba, skrypt pominie je i jasno to zakomunikuje.
 Takie stale credentials sa tez automatycznie sprzatane z lokalnego `gh/app/out`, ze wspoldzielonego cache oraz z AWS SSM.
 Po wybraniu albo utworzeniu Appki wykonuje upsert jej `app_id` i `private_key_pem` do AWS SSM jako backup/fallback.
-Jesli Appka nie jest jeszcze zainstalowana dla bootstrapowanego repo albo repo nie jest objete jej instalacja, skrypt poda odpowiedni link, moze otworzyc przegladarke i poczeka az dostep do repo bedzie gotowy.
+Jesli Appka nie jest jeszcze zainstalowana na organizacji albo instalacja uzywa `selected repositories`, skrypt poda odpowiedni link, moze otworzyc przegladarke i poprosi o potwierdzenie konfiguracji dla bootstrapowanego repo.
 W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials z tych lokalizacji.
 Przegladarka dla GitHub App manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
 Do org-level variables/secrets/team management potrzebny jest `gh` z zakresem `admin:org`.
 Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.
-Przy repo-level walidacji instalacji GitHub App skrypt moze tez automatycznie poprosic o scope `user`.
 
 Po wykonaniu prerequisite uruchamiasz `bootstrap-all`.

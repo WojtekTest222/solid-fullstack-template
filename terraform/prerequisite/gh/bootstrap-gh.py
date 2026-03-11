@@ -866,58 +866,10 @@ def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
     return set(installations.keys())
 
 
-def fetch_repo_names_for_installation(installation_id: str) -> set[str]:
-    ensure_gh_scope("user")
-    repo_names: set[str] = set()
-    page = 1
-    per_page = 100
-
-    while True:
-        command = [
-            "gh",
-            "api",
-            "--method",
-            "GET",
-            f"/user/installations/{installation_id}/repositories",
-            "--field",
-            f"per_page={per_page}",
-            "--field",
-            f"page={page}",
-        ]
-        result = run_command(command)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Could not read repositories for GitHub App installation '{installation_id}'.\n"
-                f"Command failed ({result.returncode}): {' '.join(command)}\n"
-                f"STDERR:\n{result.stderr}\nSTDOUT:\n{result.stdout}"
-            )
-
-        try:
-            response = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"GitHub returned invalid JSON while reading repositories for installation '{installation_id}'."
-            ) from exc
-
-        repositories = response.get("repositories", [])
-        for repository in repositories:
-            full_name = str(repository.get("full_name", "")).strip().lower()
-            if full_name:
-                repo_names.add(full_name)
-
-        total_count = int(response.get("total_count", 0) or 0)
-        if not repositories or len(repo_names) >= total_count or len(repositories) < per_page:
-            break
-        page += 1
-
-    return repo_names
-
-
 def get_repo_installation_status_for_app(*, owner: str, repo: str, payload: dict) -> dict[str, str | bool]:
     app_id = str(payload.get("id", "")).strip()
     app_slug = str(payload.get("slug", "")).strip()
     app_name = str(payload.get("name", "")).strip() or app_slug or app_id or "GitHub App"
-    repo_full_name = f"{owner}/{repo}".strip().lower()
     install_url = build_app_install_url(app_slug) if app_slug else ""
 
     installations = fetch_installations_for_owner(owner, strict=True)
@@ -946,71 +898,79 @@ def get_repo_installation_status_for_app(*, owner: str, repo: str, payload: dict
             "message": f"GitHub App '{app_name}' is installed for repo '{owner}/{repo}'.",
         }
 
-    installation_id = str(installation.get("id", "")).strip()
-    repo_names = fetch_repo_names_for_installation(installation_id)
-    if repo_full_name in repo_names:
-        return {
-            "available": True,
-            "status": "available for repo",
-            "action_url": installation_url,
-            "message": f"GitHub App '{app_name}' is installed for repo '{owner}/{repo}'.",
-        }
-
     return {
         "available": False,
-        "status": "org installed, repo not selected",
+        "status": "org installed, manual repo confirmation required",
         "action_url": installation_url,
         "message": (
             f"GitHub App '{app_name}' is installed on organization '{owner}', "
-            f"but repo '{owner}/{repo}' is not included in the installation."
+            f"but the installation uses selected repositories. "
+            f"Open the installation settings and make sure repo '{owner}/{repo}' is included."
         ),
     }
 
 
 def ensure_app_available_for_repo(*, owner: str, repo: str, payload: dict, open_browser: bool) -> None:
     status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
-    if status["available"]:
-        print_step(str(status["message"]))
-        return
-
-    action_url = str(status.get("action_url", "")).strip()
-    if not action_url:
-        raise RuntimeError(str(status["message"]))
-
-    print_step(str(status["message"]))
-    print("GitHub App installation/configuration URL:")
-    print(action_url)
-    if open_browser:
-        opened = webbrowser.open(action_url, new=1, autoraise=True)
-        if not opened:
-            print_step("Failed to open browser automatically. Open the installation/configuration URL manually.")
-
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            f"GitHub App is not yet available for repo '{owner}/{repo}'. "
-            f"Open: {action_url}"
-        )
-
-    started_at = datetime.now().astimezone()
-    timeout_at = started_at + timedelta(seconds=APP_INSTALL_WAIT_TIMEOUT_SECONDS)
-    print(
-        f"Waiting for GitHub App access on {owner}/{repo} "
-        f"(now: {format_local_time(started_at)}, timeout at: {format_local_time(timeout_at)})..."
-    )
-    print("Press Ctrl+C to cancel.")
-
-    deadline_monotonic = time.monotonic() + APP_INSTALL_WAIT_TIMEOUT_SECONDS
     while True:
-        time.sleep(APP_INSTALL_WAIT_POLL_SECONDS)
-        status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
         if status["available"]:
             print_step(str(status["message"]))
             return
-        if time.monotonic() >= deadline_monotonic:
+
+        action_url = str(status.get("action_url", "")).strip()
+        if not action_url:
+            raise RuntimeError(str(status["message"]))
+
+        print_step(str(status["message"]))
+        print("GitHub App installation/configuration URL:")
+        print(action_url)
+        if open_browser:
+            opened = webbrowser.open(action_url, new=1, autoraise=True)
+            if not opened:
+                print_step("Failed to open browser automatically. Open the installation/configuration URL manually.")
+
+        if not sys.stdin.isatty():
             raise RuntimeError(
-                f"Timed out waiting for GitHub App access on repo '{owner}/{repo}'. "
-                f"Finish installation/configuration here: {action_url}"
+                f"GitHub App is not yet available for repo '{owner}/{repo}'. "
+                f"Open: {action_url}"
             )
+
+        if status["status"] == "org installed, manual repo confirmation required":
+            print(f"Add repo '{owner}/{repo}' to the GitHub App installation or switch to 'All repositories'.")
+            input("Press Enter after you finish the installation configuration...")
+            refreshed_status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+            if refreshed_status["available"]:
+                print_step(str(refreshed_status["message"]))
+                return
+
+            print_step(
+                "GitHub still reports a selected-repositories installation. "
+                "Continuing after your manual confirmation because this repo selection cannot be verified with the current gh auth token."
+            )
+            return
+
+        started_at = datetime.now().astimezone()
+        timeout_at = started_at + timedelta(seconds=APP_INSTALL_WAIT_TIMEOUT_SECONDS)
+        print(
+            f"Waiting for GitHub App installation on organization '{owner}' "
+            f"(now: {format_local_time(started_at)}, timeout at: {format_local_time(timeout_at)})..."
+        )
+        print("Press Ctrl+C to cancel.")
+
+        deadline_monotonic = time.monotonic() + APP_INSTALL_WAIT_TIMEOUT_SECONDS
+        while True:
+            time.sleep(APP_INSTALL_WAIT_POLL_SECONDS)
+            status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+            if status["available"]:
+                print_step(str(status["message"]))
+                return
+            if status["status"] == "org installed, manual repo confirmation required":
+                break
+            if time.monotonic() >= deadline_monotonic:
+                raise RuntimeError(
+                    f"Timed out waiting for GitHub App installation on organization '{owner}'. "
+                    f"Finish installation/configuration here: {action_url}"
+                )
 
 
 def format_app_option(payload: dict, *, installed_app_ids: set[str] | None = None) -> str:
