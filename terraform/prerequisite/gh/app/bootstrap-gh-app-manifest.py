@@ -32,6 +32,7 @@ from typing import Any
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_WEB_BASE = "https://github.com"
 ANSI_GREEN = "\033[92m"
+ANSI_RED = "\033[91m"
 ANSI_RESET = "\033[0m"
 
 
@@ -43,6 +44,12 @@ def green(text: str) -> str:
     if not supports_color():
         return text
     return f"{ANSI_GREEN}{text}{ANSI_RESET}"
+
+
+def red(text: str) -> str:
+    if not sys.stderr.isatty():
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
 
 
 def format_local_time(value: datetime) -> str:
@@ -347,7 +354,7 @@ def main() -> int:
         print("\nInterrupted.")
         return 130
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(red(f"[ERROR] {exc}"), file=sys.stderr)
         return 1
 
 

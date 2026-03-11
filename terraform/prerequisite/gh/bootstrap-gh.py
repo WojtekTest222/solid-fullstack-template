@@ -23,6 +23,14 @@ DEFAULT_APP_PREFIX = "gha"
 MAX_GITHUB_APP_NAME_LENGTH = 34
 DEFAULT_ORG_SEGMENT_LENGTH = 20
 DEFAULT_APP_SUFFIX_LENGTH = 6
+ANSI_RED = "\033[91m"
+ANSI_RESET = "\033[0m"
+
+
+def red(text: str) -> str:
+    if not sys.stderr.isatty():
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
 
 
 def print_step(message: str) -> None:
@@ -620,5 +628,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(red(f"[ERROR] {exc}"), file=sys.stderr)
         raise SystemExit(1)

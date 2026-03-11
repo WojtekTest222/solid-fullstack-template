@@ -23,8 +23,8 @@ python bootstrap.py `
 Jesli pominiesz `--org` albo `--repo`, skrypt sprobuje wziac je z `git remote origin`.
 Jesli nie da sie ich ustalic z `.git`, wtedy dopyta interaktywnie.
 Jesli pominiesz `--aws-region`, skrypt pokaze menu obslugiwane strzalkami:
-- `us-east-1` (`US East / N. Virginia`)
 - `eu-central-1` (`EU Central / Frankfurt`)
+- `us-east-1` (`US East / N. Virginia`)
 - `Custom`
 Jesli nie ustawisz `AWS_PROFILE` i nie podasz `--aws-profile`, skrypt AWS wyswietli profile znalezione w `~/.aws` i poprosi o wybor strzalkami.
 GitHub App jest domyslnie nazywana wedlug konwencji `gha-<pierwsze-20-znakow-org>-<hash6>`.

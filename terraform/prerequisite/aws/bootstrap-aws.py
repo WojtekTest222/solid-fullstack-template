@@ -21,6 +21,21 @@ from pathlib import Path
 
 DEFAULT_BOOTSTRAP_ROLE_NAME = "gha-bootstrap-org"
 DEFAULT_LOCK_TABLE_NAME = "terraform-locks"
+ANSI_GREEN = "\033[92m"
+ANSI_RED = "\033[91m"
+ANSI_RESET = "\033[0m"
+
+
+def green(text: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    return f"{ANSI_GREEN}{text}{ANSI_RESET}"
+
+
+def red(text: str) -> str:
+    if not sys.stderr.isatty():
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
 
 
 def print_step(message: str) -> None:
@@ -55,6 +70,19 @@ def run_command_checked(command: list[str], *, cwd: Path | None = None, descript
         )
         raise RuntimeError(message)
     return result.stdout.strip()
+
+
+def build_tf_state_bucket_name(*, aws_account_id: str, aws_region: str) -> str:
+    return f"tfstate-{aws_account_id}-{aws_region}"
+
+
+def normalize_aws_cli_error(result: subprocess.CompletedProcess[str]) -> str:
+    return "\n".join(part for part in [result.stderr.strip(), result.stdout.strip()] if part).strip()
+
+
+def is_missing_resource_error(result: subprocess.CompletedProcess[str], *, patterns: list[str]) -> bool:
+    error_text = normalize_aws_cli_error(result).lower()
+    return any(pattern in error_text for pattern in patterns)
 
 
 def parse_args() -> argparse.Namespace:
@@ -301,6 +329,98 @@ def verify_cli_prerequisites(*, aws_profile: str) -> None:
     ensure_gh_scope("admin:org")
 
 
+def check_s3_bucket_exists(*, bucket_name: str, aws_region: str) -> bool:
+    result = run_command(
+        [
+            "aws",
+            "s3api",
+            "get-bucket-location",
+            "--bucket",
+            bucket_name,
+            "--query",
+            "LocationConstraint",
+            "--output",
+            "text",
+        ]
+    )
+    if result.returncode != 0:
+        if is_missing_resource_error(result, patterns=["nosuchbucket", "not found", "404"]):
+            return False
+        raise RuntimeError(
+            f"Failed to verify S3 bucket '{bucket_name}'.\n{normalize_aws_cli_error(result)}"
+        )
+
+    raw_location = result.stdout.strip()
+    actual_region = "us-east-1" if raw_location in {"", "None", "null"} else raw_location
+    if actual_region != aws_region:
+        raise RuntimeError(
+            f"S3 bucket '{bucket_name}' already exists but is in region '{actual_region}', expected '{aws_region}'."
+        )
+    return True
+
+
+def check_dynamodb_table_exists(*, table_name: str, aws_region: str) -> bool:
+    result = run_command(
+        [
+            "aws",
+            "dynamodb",
+            "describe-table",
+            "--table-name",
+            table_name,
+            "--region",
+            aws_region,
+            "--query",
+            "Table.TableArn",
+            "--output",
+            "text",
+        ]
+    )
+    if result.returncode != 0:
+        if is_missing_resource_error(result, patterns=["resourcenotfoundexception", "not found"]):
+            return False
+        raise RuntimeError(
+            f"Failed to verify DynamoDB table '{table_name}'.\n{normalize_aws_cli_error(result)}"
+        )
+    return True
+
+
+def check_iam_role_exists(*, role_name: str) -> bool:
+    result = run_command(
+        [
+            "aws",
+            "iam",
+            "get-role",
+            "--role-name",
+            role_name,
+            "--query",
+            "Role.Arn",
+            "--output",
+            "text",
+        ]
+    )
+    if result.returncode != 0:
+        if is_missing_resource_error(result, patterns=["nosuchentity", "cannot find"]):
+            return False
+        raise RuntimeError(
+            f"Failed to verify IAM role '{role_name}'.\n{normalize_aws_cli_error(result)}"
+        )
+    return True
+
+
+def inspect_existing_aws_prerequisites(*, aws_account_id: str, aws_region: str) -> tuple[str, dict[str, bool]]:
+    tf_state_bucket = build_tf_state_bucket_name(aws_account_id=aws_account_id, aws_region=aws_region)
+    print_step("Checking whether AWS prerequisite resources already exist on this account...")
+    resource_state = {
+        f"S3 bucket '{tf_state_bucket}'": check_s3_bucket_exists(bucket_name=tf_state_bucket, aws_region=aws_region),
+        f"DynamoDB table '{DEFAULT_LOCK_TABLE_NAME}'": check_dynamodb_table_exists(
+            table_name=DEFAULT_LOCK_TABLE_NAME,
+            aws_region=aws_region,
+        ),
+        f"IAM role '{DEFAULT_BOOTSTRAP_ROLE_NAME}'": check_iam_role_exists(role_name=DEFAULT_BOOTSTRAP_ROLE_NAME),
+    }
+    return tf_state_bucket, resource_state
+
+
 def write_runtime_tfvars(*, org: str, repo: str, aws_region: str) -> str:
     print_step("Preparing temporary Terraform variables for AWS prerequisite...")
     content = "\n".join(
@@ -387,20 +507,47 @@ def main() -> int:
     )
     aws_profile = resolve_aws_profile(args.aws_profile)
     verify_cli_prerequisites(aws_profile=aws_profile)
+    aws_account_id = get_aws_account_id()
+    tf_state_bucket, resource_state = inspect_existing_aws_prerequisites(
+        aws_account_id=aws_account_id,
+        aws_region=args.aws_region,
+    )
+
+    existing_resources = [name for name, exists in resource_state.items() if exists]
+    missing_resources = [name for name, exists in resource_state.items() if not exists]
+    bootstrap_mode = ""
 
     base_dir = Path(__file__).resolve().parent
-    tfvars_path = write_runtime_tfvars(org=args.org, repo=args.repo, aws_region=args.aws_region)
+    if len(existing_resources) == len(resource_state):
+        bootstrap_mode = "reused-existing"
+        print(green("[OK] All required AWS prerequisite resources already exist. Skipping Terraform apply."))
+        for resource_name in existing_resources:
+            print(green(f"  - {resource_name}"))
+    elif len(existing_resources) == 0:
+        bootstrap_mode = "created"
+        tfvars_path = write_runtime_tfvars(org=args.org, repo=args.repo, aws_region=args.aws_region)
+        try:
+            outputs = run_terraform(base_dir, tfvars_path=tfvars_path)
+        finally:
+            Path(tfvars_path).unlink(missing_ok=True)
 
-    try:
-        outputs = run_terraform(base_dir, tfvars_path=tfvars_path)
-    finally:
-        Path(tfvars_path).unlink(missing_ok=True)
+        tf_state_bucket_output = str(outputs["tf_state_bucket"]["value"]).strip()
+        if not tf_state_bucket_output:
+            raise RuntimeError("Missing tf_state_bucket output after Terraform apply.")
+        if tf_state_bucket_output != tf_state_bucket:
+            raise RuntimeError(
+                f"Terraform output tf_state_bucket='{tf_state_bucket_output}' does not match expected '{tf_state_bucket}'."
+            )
+    else:
+        existing_text = ", ".join(existing_resources)
+        missing_text = ", ".join(missing_resources)
+        raise RuntimeError(
+            "AWS prerequisite resources are only partially present on this account. "
+            "The script can continue only when all three already exist or none of them exist.\n"
+            f"Existing: {existing_text}\n"
+            f"Missing: {missing_text}"
+        )
 
-    tf_state_bucket = str(outputs["tf_state_bucket"]["value"]).strip()
-    if not tf_state_bucket:
-        raise RuntimeError("Missing tf_state_bucket output after Terraform apply.")
-
-    aws_account_id = get_aws_account_id()
     changes = upsert_github_variables(
         org=args.org,
         repo=args.repo,
@@ -414,6 +561,7 @@ def main() -> int:
     print(f"- repo: {args.repo}")
     print(f"- aws_region: {args.aws_region}")
     print(f"- aws_profile: {aws_profile}")
+    print(f"- bootstrap_mode: {bootstrap_mode}")
     print(f"- aws_account_id: {aws_account_id}")
     print(f"- bootstrap_role_name: {DEFAULT_BOOTSTRAP_ROLE_NAME}")
     print(f"- tf_state_bucket: {tf_state_bucket}")
@@ -429,5 +577,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(red(f"[ERROR] {exc}"), file=sys.stderr)
         raise SystemExit(1)

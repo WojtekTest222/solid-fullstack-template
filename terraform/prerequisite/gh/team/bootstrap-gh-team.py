@@ -18,6 +18,15 @@ import subprocess
 import sys
 from typing import Iterable
 
+ANSI_RED = "\033[91m"
+ANSI_RESET = "\033[0m"
+
+
+def red(text: str) -> str:
+    if not sys.stderr.isatty():
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
+
 
 def split_csv(raw_value: str) -> list[str]:
     parts = [part.strip() for part in raw_value.split(",")]
@@ -202,5 +211,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(red(f"[ERROR] {exc}"), file=sys.stderr)
         raise SystemExit(1)

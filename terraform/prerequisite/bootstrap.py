@@ -17,10 +17,18 @@ import sys
 from pathlib import Path
 
 COMMON_AWS_REGION_CHOICES = [
-    ("us-east-1", "US East (N. Virginia)"),
     ("eu-central-1", "EU Central (Frankfurt)"),
+    ("us-east-1", "US East (N. Virginia)"),
     ("custom", "Custom"),
 ]
+ANSI_RED = "\033[91m"
+ANSI_RESET = "\033[0m"
+
+
+def red(text: str) -> str:
+    if not sys.stderr.isatty():
+        return text
+    return f"{ANSI_RED}{text}{ANSI_RESET}"
 
 
 def print_step(message: str) -> None:
@@ -304,5 +312,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(red(f"[ERROR] {exc}"), file=sys.stderr)
         raise SystemExit(1)
