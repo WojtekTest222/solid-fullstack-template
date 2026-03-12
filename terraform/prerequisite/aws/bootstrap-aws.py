@@ -174,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bootstrap AWS prerequisite Terraform and publish required GitHub variables."
     )
-    parser.add_argument("--org", required=True, help="GitHub organization")
+    parser.add_argument("--org", required=True, help="GitHub owner (organization or user)")
     parser.add_argument("--repo", required=True, help="Repository name that receives bootstrap variables")
     parser.add_argument("--aws-region", required=True, help="AWS region for prerequisite resources")
     parser.add_argument("--aws-profile", default="", help="AWS profile to use")
@@ -374,6 +374,18 @@ def ensure_gh_scope(required_scope: str) -> None:
     )
 
 
+def resolve_github_owner_type(owner: str) -> str:
+    owner_type = run_command_checked(
+        ["gh", "api", f"/users/{owner}", "--jq", ".type"],
+        description=f"Detecting GitHub owner type for '{owner}'...",
+    ).strip()
+    if owner_type not in {"Organization", "User"}:
+        raise RuntimeError(
+            f"Unsupported GitHub owner type '{owner_type}' for '{owner}'. Expected 'Organization' or 'User'."
+        )
+    return owner_type
+
+
 def prompt_for_aws_profile(profiles: list[str]) -> str:
     if not sys.stdin.isatty():
         available = ", ".join(profiles) if profiles else "none found"
@@ -408,7 +420,7 @@ def resolve_aws_profile(profile_arg: str) -> str:
     return prompt_for_aws_profile(profiles)
 
 
-def verify_cli_prerequisites(*, aws_profile: str) -> None:
+def verify_cli_prerequisites(*, aws_profile: str, owner_type: str) -> None:
     os.environ["AWS_PROFILE"] = aws_profile
     print_step(f"Using AWS profile '{aws_profile}'.")
     run_command_checked(["terraform", "version"], description="Checking Terraform CLI...")
@@ -424,7 +436,15 @@ def verify_cli_prerequisites(*, aws_profile: str) -> None:
             f"Refresh credentials first (for SSO usually: aws sso login --profile {aws_profile}).\n{exc}"
         ) from exc
     run_command_checked(["gh", "--version"], description="Checking GitHub CLI...")
-    ensure_gh_scope("admin:org")
+    if owner_type == "Organization":
+        ensure_gh_scope("admin:org")
+        return
+
+    get_gh_auth_status_text()
+    print_step(
+        "GitHub owner is a personal account. Repository-level Actions variables will be used; "
+        "admin:org scope is not required."
+    )
 
 
 def check_s3_bucket_exists(*, bucket_name: str, aws_region: str) -> bool:
@@ -740,28 +760,29 @@ def get_aws_account_id() -> str:
     ).strip()
 
 
-def set_variable(name: str, value: str, *, org: str, repo: str) -> None:
-    command = [
-        "gh",
-        "variable",
-        "set",
-        name,
-        "--body",
-        value,
-        "--org",
-        org,
-        "--visibility",
-        "selected",
-        "--repos",
-        repo,
-    ]
+def set_variable(name: str, value: str, *, owner: str, repo: str, owner_type: str) -> None:
+    command = ["gh", "variable", "set", name, "--body", value]
+    if owner_type == "Organization":
+        command.extend(["--org", owner, "--visibility", "selected", "--repos", repo])
+        description = f"Setting GitHub org variable '{name}' for repo '{owner}/{repo}'..."
+    else:
+        command.extend(["--repo", f"{owner}/{repo}"])
+        description = f"Setting GitHub repo variable '{name}' for repo '{owner}/{repo}'..."
     run_command_checked_with_retry(
         command,
-        description=f"Setting GitHub org variable '{name}' for repo '{org}/{repo}'...",
+        description=description,
     )
 
 
-def upsert_github_variables(*, org: str, repo: str, aws_region: str, aws_account_id: str, tf_state_bucket: str) -> list[str]:
+def upsert_github_variables(
+    *,
+    owner: str,
+    repo: str,
+    owner_type: str,
+    aws_region: str,
+    aws_account_id: str,
+    tf_state_bucket: str,
+) -> list[str]:
     changes: list[str] = []
     variables = {
         "AWS_REGION": aws_region,
@@ -771,7 +792,7 @@ def upsert_github_variables(*, org: str, repo: str, aws_region: str, aws_account
     }
 
     for name, value in variables.items():
-        set_variable(name, value, org=org, repo=repo)
+        set_variable(name, value, owner=owner, repo=repo, owner_type=owner_type)
         changes.append(f"variable {name}")
 
     return changes
@@ -780,10 +801,12 @@ def upsert_github_variables(*, org: str, repo: str, aws_region: str, aws_account
 def main() -> int:
     args = parse_args()
     print_step(
-        f"Starting AWS prerequisite bootstrap for org='{args.org}', repo='{args.repo}', region='{args.aws_region}'."
+        f"Starting AWS prerequisite bootstrap for owner='{args.org}', repo='{args.repo}', region='{args.aws_region}'."
     )
     aws_profile = resolve_aws_profile(args.aws_profile)
-    verify_cli_prerequisites(aws_profile=aws_profile)
+    owner_type = resolve_github_owner_type(args.org)
+    print_step(f"Detected GitHub owner type '{owner_type}' for '{args.org}'.")
+    verify_cli_prerequisites(aws_profile=aws_profile, owner_type=owner_type)
     aws_account_id = get_aws_account_id()
     tf_state_bucket, resource_state = inspect_existing_aws_prerequisites(
         aws_account_id=aws_account_id,
@@ -829,15 +852,17 @@ def main() -> int:
         )
 
     variable_changes = upsert_github_variables(
-        org=args.org,
+        owner=args.org,
         repo=args.repo,
+        owner_type=owner_type,
         aws_region=args.aws_region,
         aws_account_id=aws_account_id,
         tf_state_bucket=tf_state_bucket,
     )
 
     print("\nbootstrap-aws-prerequisite summary:")
-    print(f"- org: {args.org}")
+    print(f"- owner: {args.org}")
+    print(f"- owner_type: {owner_type}")
     print(f"- repo: {args.repo}")
     print(f"- aws_region: {args.aws_region}")
     print(f"- aws_profile: {aws_profile}")

@@ -331,7 +331,7 @@ def select_with_arrows(prompt_text: str, options: list[str]) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap GitHub prerequisite (app + team + app secrets).")
-    parser.add_argument("--org", required=True, help="GitHub organization")
+    parser.add_argument("--org", required=True, help="GitHub owner (organization or user)")
     parser.add_argument("--bootstrap-repo", required=True, help="Repository name that receives app secrets")
     parser.add_argument(
         "--scope",
@@ -456,6 +456,18 @@ def ensure_gh_scope(required_scope: str) -> None:
         f"Could not confirm GitHub CLI scopes from `gh auth status`. "
         f"If org administration calls fail, run: gh auth refresh -h github.com -s {required_scope}"
     )
+
+
+def resolve_github_owner_type(owner: str) -> str:
+    owner_type = run_command_checked(
+        ["gh", "api", f"/users/{owner}", "--jq", ".type"],
+        description=f"Detecting GitHub owner type for '{owner}'...",
+    ).strip()
+    if owner_type not in {"Organization", "User"}:
+        raise RuntimeError(
+            f"Unsupported GitHub owner type '{owner_type}' for '{owner}'. Expected 'Organization' or 'User'."
+        )
+    return owner_type
 
 
 def collect_credentials_bundles(search_dirs: list[Path]) -> list[tuple[float, Path, Path, dict]]:
@@ -826,7 +838,10 @@ def build_app_install_url(app_slug: str) -> str:
     return f"https://github.com/apps/{app_slug}/installations/new"
 
 
-def fetch_installations_for_owner(owner: str, *, strict: bool) -> dict[str, dict] | None:
+def fetch_installations_for_owner(owner: str, *, owner_type: str, strict: bool) -> dict[str, dict] | None:
+    if owner_type == "User":
+        return None
+
     org = owner.strip()
     if not org:
         return None
@@ -859,20 +874,37 @@ def fetch_installations_for_owner(owner: str, *, strict: bool) -> dict[str, dict
     return installations
 
 
-def fetch_installed_app_ids_for_owner(owner: str) -> set[str] | None:
-    installations = fetch_installations_for_owner(owner, strict=False)
+def fetch_installed_app_ids_for_owner(owner: str, *, owner_type: str) -> set[str] | None:
+    installations = fetch_installations_for_owner(owner, owner_type=owner_type, strict=False)
     if installations is None:
         return None
     return set(installations.keys())
 
 
-def get_repo_installation_status_for_app(*, owner: str, repo: str, payload: dict) -> dict[str, str | bool]:
+def get_repo_installation_status_for_app(
+    *,
+    owner: str,
+    repo: str,
+    payload: dict,
+    owner_type: str,
+) -> dict[str, str | bool]:
     app_id = str(payload.get("id", "")).strip()
     app_slug = str(payload.get("slug", "")).strip()
     app_name = str(payload.get("name", "")).strip() or app_slug or app_id or "GitHub App"
     install_url = build_app_install_url(app_slug) if app_slug else ""
 
-    installations = fetch_installations_for_owner(owner, strict=True)
+    if owner_type == "User":
+        return {
+            "available": False,
+            "status": "manual confirmation required",
+            "action_url": install_url,
+            "message": (
+                f"GitHub App '{app_name}' must be installed for repo '{owner}/{repo}'. "
+                "Automatic installation verification is not available for personal accounts with the current gh auth token."
+            ),
+        }
+
+    installations = fetch_installations_for_owner(owner, owner_type=owner_type, strict=True)
     if installations is None:
         raise RuntimeError(f"Could not read GitHub App installations for org '{owner}'.")
 
@@ -910,8 +942,15 @@ def get_repo_installation_status_for_app(*, owner: str, repo: str, payload: dict
     }
 
 
-def ensure_app_available_for_repo(*, owner: str, repo: str, payload: dict, open_browser: bool) -> None:
-    status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+def ensure_app_available_for_repo(
+    *,
+    owner: str,
+    repo: str,
+    payload: dict,
+    open_browser: bool,
+    owner_type: str,
+) -> None:
+    status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload, owner_type=owner_type)
     while True:
         if status["available"]:
             print_step(str(status["message"]))
@@ -935,10 +974,24 @@ def ensure_app_available_for_repo(*, owner: str, repo: str, payload: dict, open_
                 f"Open: {action_url}"
             )
 
+        if status["status"] == "manual confirmation required":
+            print(f"Install the GitHub App for repo '{owner}/{repo}'.")
+            input("Press Enter after you finish the installation... ")
+            print_step(
+                "Continuing after manual confirmation because installation cannot be verified automatically "
+                "for personal accounts with the current gh auth token."
+            )
+            return
+
         if status["status"] == "org installed, manual repo confirmation required":
             print(f"Add repo '{owner}/{repo}' to the GitHub App installation or switch to 'All repositories'.")
             input("Press Enter after you finish the installation configuration...")
-            refreshed_status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+            refreshed_status = get_repo_installation_status_for_app(
+                owner=owner,
+                repo=repo,
+                payload=payload,
+                owner_type=owner_type,
+            )
             if refreshed_status["available"]:
                 print_step(str(refreshed_status["message"]))
                 return
@@ -960,7 +1013,12 @@ def ensure_app_available_for_repo(*, owner: str, repo: str, payload: dict, open_
         deadline_monotonic = time.monotonic() + APP_INSTALL_WAIT_TIMEOUT_SECONDS
         while True:
             time.sleep(APP_INSTALL_WAIT_POLL_SECONDS)
-            status = get_repo_installation_status_for_app(owner=owner, repo=repo, payload=payload)
+            status = get_repo_installation_status_for_app(
+                owner=owner,
+                repo=repo,
+                payload=payload,
+                owner_type=owner_type,
+            )
             if status["available"]:
                 print_step(str(status["message"]))
                 return
@@ -990,6 +1048,7 @@ def resolve_app_target(
     *,
     search_dirs: list[Path],
     owner: str,
+    owner_type: str,
     requested_app_name: str,
     force_create_app: bool,
     aws_region: str,
@@ -997,7 +1056,7 @@ def resolve_app_target(
 ) -> tuple[str, tuple[Path, Path, dict] | None]:
     target_app_name = requested_app_name.strip() or build_default_app_name(owner)
     known_credentials, ignored_messages, stale_payloads = list_reusable_credentials(search_dirs, owner=owner)
-    installed_app_ids = fetch_installed_app_ids_for_owner(owner)
+    installed_app_ids = fetch_installed_app_ids_for_owner(owner, owner_type=owner_type)
 
     for message in ignored_messages:
         print_step(message)
@@ -1061,7 +1120,8 @@ def resolve_app_target(
 
 def run_app_bootstrap(
     script_path: Path,
-    org: str,
+    owner: str,
+    owner_type: str,
     app_name: str,
     app_description: str,
     homepage_url: str,
@@ -1071,8 +1131,6 @@ def run_app_bootstrap(
     command = [
         sys.executable,
         str(script_path),
-        "--org",
-        org,
         "--app-name",
         app_name,
         "--description",
@@ -1080,6 +1138,10 @@ def run_app_bootstrap(
         "--output-dir",
         str(output_dir),
     ]
+    if owner_type == "Organization":
+        command.extend(["--org", owner])
+    else:
+        command.extend(["--user", owner])
     if homepage_url.strip():
         command.extend(["--homepage-url", homepage_url.strip()])
     if open_browser:
@@ -1095,12 +1157,19 @@ def split_csv(raw_value: str) -> list[str]:
 def ensure_team(
     team_script_path: Path,
     org: str,
+    owner_type: str,
     team_name: str,
     team_description: str,
     maintainers: str,
     members: str,
     admin_repo: str | None,
 ) -> None:
+    if owner_type == "User":
+        print_step(
+            "GitHub owner is a personal account. Skipping administrators team bootstrap because teams exist only in organizations."
+        )
+        return
+
     command = [
         sys.executable,
         str(team_script_path),
@@ -1120,9 +1189,9 @@ def ensure_team(
     run_command_checked(command, description="Ensuring administrators team baseline...")
 
 
-def set_secret(name: str, value: str, *, scope: str, org: str, repo: str) -> None:
+def set_secret(name: str, value: str, *, scope: str, org: str, repo: str, owner_type: str) -> None:
     command = ["gh", "secret", "set", name, "--body", value]
-    if scope == "repo":
+    if scope == "repo" or owner_type == "User":
         command.extend(["--repo", f"{org}/{repo}"])
     else:
         command.extend(["--org", org, "--visibility", "selected", "--repos", repo])
@@ -1134,29 +1203,42 @@ def upsert_bootstrap_secrets(
     scope: str,
     org: str,
     repo: str,
+    owner_type: str,
     app_id: str,
     private_key_pem: str,
 ) -> list[str]:
     changes: list[str] = []
 
-    set_secret("GH_APP_ID", app_id, scope=scope, org=org, repo=repo)
+    set_secret("GH_APP_ID", app_id, scope=scope, org=org, repo=repo, owner_type=owner_type)
     changes.append("secret GH_APP_ID")
 
-    set_secret("GH_APP_PRIVATE_KEY", private_key_pem, scope=scope, org=org, repo=repo)
+    set_secret("GH_APP_PRIVATE_KEY", private_key_pem, scope=scope, org=org, repo=repo, owner_type=owner_type)
     changes.append("secret GH_APP_PRIVATE_KEY")
 
     return changes
 
 
-def verify_cli_prerequisites() -> None:
+def verify_cli_prerequisites(*, owner_type: str) -> None:
     run_command_checked(["gh", "--version"], description="Checking GitHub CLI...")
-    ensure_gh_scope("admin:org")
+    if owner_type == "Organization":
+        ensure_gh_scope("admin:org")
+        return
+
+    get_gh_auth_status_text()
+    print_step(
+        "GitHub owner is a personal account. Repository-level secrets will be used and team bootstrap will be skipped."
+    )
 
 
 def main() -> int:
     args = parse_args()
-    print_step(f"Starting GitHub prerequisite bootstrap for org='{args.org}', repo='{args.bootstrap_repo}'.")
-    verify_cli_prerequisites()
+    print_step(f"Starting GitHub prerequisite bootstrap for owner='{args.org}', repo='{args.bootstrap_repo}'.")
+    owner_type = resolve_github_owner_type(args.org)
+    print_step(f"Detected GitHub owner type '{owner_type}' for '{args.org}'.")
+    verify_cli_prerequisites(owner_type=owner_type)
+    if owner_type == "User" and args.scope != "repo":
+        print_step("GitHub owner is a personal account. Forcing GitHub App secrets scope to 'repo'.")
+        args.scope = "repo"
     aws_region = resolve_aws_region(args.aws_region)
     aws_profile = args.aws_profile.strip() or os.environ.get("AWS_PROFILE", "").strip()
 
@@ -1171,6 +1253,7 @@ def main() -> int:
     app_name, credentials_bundle = resolve_app_target(
         search_dirs=search_dirs,
         owner=args.org,
+        owner_type=owner_type,
         requested_app_name=args.app_name,
         force_create_app=args.force_create_app,
         aws_region=aws_region,
@@ -1187,7 +1270,8 @@ def main() -> int:
         previous_state = snapshot_credentials_state(search_dirs)
         run_app_bootstrap(
             script_path=app_script,
-            org=args.org,
+            owner=args.org,
+            owner_type=owner_type,
             app_name=app_name,
             app_description=args.app_description,
             homepage_url=args.homepage_url,
@@ -1236,12 +1320,14 @@ def main() -> int:
         repo=args.bootstrap_repo,
         payload=payload,
         open_browser=args.open_browser,
+        owner_type=owner_type,
     )
 
     grant_admin_repo = None if args.skip_team_repo_admin_grant else args.bootstrap_repo
     ensure_team(
         team_script_path=team_script,
         org=args.org,
+        owner_type=owner_type,
         team_name=args.team_name,
         team_description=args.team_description,
         maintainers=args.team_maintainers,
@@ -1253,12 +1339,14 @@ def main() -> int:
         scope=args.scope,
         org=args.org,
         repo=args.bootstrap_repo,
+        owner_type=owner_type,
         app_id=app_id,
         private_key_pem=private_key_pem,
     )
 
     print("\nbootstrap-gh-prerequisite summary:")
-    print(f"- org: {args.org}")
+    print(f"- owner: {args.org}")
+    print(f"- owner_type: {owner_type}")
     print(f"- bootstrap_repo: {args.bootstrap_repo}")
     print(f"- scope: {args.scope}")
     print(f"- app_id: {app_id}")

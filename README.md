@@ -2,7 +2,7 @@
 
 Template do szybkiego startu aplikacji z bootstrapem AWS Organizations + IAM + governance GitHub.
 
-## 1. One-time prerequisite (na AWS management account + GitHub org)
+## 1. One-time prerequisite (na AWS management account + GitHub owner)
 
 1. Wykonaj wspolny prerequisite orchestrator:
    - [terraform/prerequisite/README.md](terraform/prerequisite/README.md)

@@ -5,7 +5,7 @@ variable "aws_region" {
 }
 
 variable "github_org" {
-  description = "GitHub organization that will host repositories created from the template."
+  description = "GitHub owner that will host repositories created from the template."
   type        = string
   default     = ""
 

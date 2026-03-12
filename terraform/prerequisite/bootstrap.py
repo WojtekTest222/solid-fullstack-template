@@ -135,7 +135,7 @@ def resolve_aws_profile(profile_arg: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap AWS + GitHub prerequisites in one run.")
-    parser.add_argument("--org", default="", help="GitHub organization")
+    parser.add_argument("--org", default="", help="GitHub owner (organization or user)")
     parser.add_argument("--repo", default="", help="Repository name receiving bootstrap variables and secrets")
     parser.add_argument("--aws-region", default="", help="AWS region for prerequisite resources")
     parser.add_argument("--aws-profile", default="", help="AWS profile to use")
@@ -323,7 +323,7 @@ def main() -> int:
             args.repo = git_repo
         print_step(f"Detected GitHub remote context from .git: org='{git_org}', repo='{git_repo}'.")
 
-    args.org = prompt_if_missing(args.org, "GitHub organization")
+    args.org = prompt_if_missing(args.org, "GitHub owner")
     args.repo = prompt_if_missing(args.repo, "Bootstrap repository")
     args.aws_region = prompt_for_aws_region(args.aws_region)
     args.aws_profile = resolve_aws_profile(args.aws_profile)
