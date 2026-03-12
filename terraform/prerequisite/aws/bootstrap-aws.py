@@ -138,16 +138,27 @@ def build_tf_state_bucket_name(*, aws_account_id: str, aws_region: str) -> str:
     return f"tfstate-{aws_account_id}-{aws_region}"
 
 
-def build_github_main_subject(*, org: str, repo: str) -> str:
-    return f"repo:{org}/{repo}:ref:refs/heads/main"
+def build_github_bootstrap_environment_subject(*, org: str, repo: str) -> str:
+    return f"repo:{org}/{repo}:environment:{BOOTSTRAP_ENVIRONMENT_NAME}"
 
 
 def normalize_github_subject_pattern(pattern: str) -> str:
     normalized = pattern.strip()
     legacy_repo_match = re.fullmatch(r"repo:([^/]+)/([^:]+):\*", normalized)
-    if not legacy_repo_match:
-        return normalized
-    return build_github_main_subject(org=legacy_repo_match.group(1), repo=legacy_repo_match.group(2))
+    if legacy_repo_match:
+        return build_github_bootstrap_environment_subject(
+            org=legacy_repo_match.group(1),
+            repo=legacy_repo_match.group(2),
+        )
+
+    legacy_main_match = re.fullmatch(r"repo:([^/]+)/([^:]+):ref:refs/heads/main", normalized)
+    if legacy_main_match:
+        return build_github_bootstrap_environment_subject(
+            org=legacy_main_match.group(1),
+            repo=legacy_main_match.group(2),
+        )
+
+    return normalized
 
 
 def dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -684,7 +695,7 @@ def ensure_bootstrap_role_trust_policy(*, org: str, repo: str) -> bool:
     current_subject_patterns = dedupe_preserve_order(current_subject_patterns)
     desired_subject_patterns = dedupe_preserve_order(
         [normalize_github_subject_pattern(pattern) for pattern in current_subject_patterns]
-        + [build_github_main_subject(org=org, repo=repo)]
+        + [build_github_bootstrap_environment_subject(org=org, repo=repo)]
     )
 
     if (
@@ -692,7 +703,7 @@ def ensure_bootstrap_role_trust_policy(*, org: str, repo: str) -> bool:
         and set(current_subject_patterns) == set(desired_subject_patterns)
     ):
         print_step(
-            f"IAM role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' already allows the required GitHub repos from branch 'main'."
+            f"IAM role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' already allows the required GitHub repos from environment '{BOOTSTRAP_ENVIRONMENT_NAME}'."
         )
         return False
 
@@ -713,7 +724,7 @@ def ensure_bootstrap_role_trust_policy(*, org: str, repo: str) -> bool:
         ],
         description=(
             f"Updating IAM trust policy for role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' "
-            f"to allow repo '{org}/{repo}' from branch 'main'..."
+            f"to allow repo '{org}/{repo}' from environment '{BOOTSTRAP_ENVIRONMENT_NAME}'..."
         ),
     )
     return True

@@ -87,7 +87,7 @@ Po manualnym `apply` ustaw w GitHub Variables (repo albo org):
 ## 4. Najwazniejsze inputy
 
 - `github_org` - wymagany
-- `github_repo` - wymagany w zalecanym flow; zawaza trust policy do jednego repo na branch `main`
+- `github_repo` - wymagany w zalecanym flow; zawaza trust policy do jednego repo na environment `bootstrap`
 - `github_subject_patterns` - opcjonalne wzorce `sub` dla OIDC
 
-Przy ponownym uruchomieniu `bootstrap-aws.py` dla kolejnego repo, jesli zasoby AWS juz istnieja, skrypt nie tworzy ich od nowa. Zamiast tego dopisuje nowe `repo:<org>/<repo>:ref:refs/heads/main` do trust policy roli `gha-bootstrap-org` i zachowuje juz dopuszczone repo.
+Przy ponownym uruchomieniu `bootstrap-aws.py` dla kolejnego repo, jesli zasoby AWS juz istnieja, skrypt nie tworzy ich od nowa. Zamiast tego dopisuje nowe `repo:<org>/<repo>:environment:bootstrap` do trust policy roli `gha-bootstrap-org` i zachowuje juz dopuszczone repo.

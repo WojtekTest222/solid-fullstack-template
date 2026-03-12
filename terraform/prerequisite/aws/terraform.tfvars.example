@@ -4,8 +4,8 @@ github_repo           = "<GITHUB_REPO>"
 
 # Optional. If OIDC provider already exists, set ARN and Terraform will reuse it.
 # github_oidc_provider_arn = "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
-# Optional. Override trust patterns; default comes from github_org/github_repo on branch main.
-# github_subject_patterns = ["repo:<GITHUB_ORG>/<GITHUB_REPO>:ref:refs/heads/main"]
+# Optional. Override trust patterns; default comes from github_org/github_repo on environment bootstrap.
+# github_subject_patterns = ["repo:<GITHUB_ORG>/<GITHUB_REPO>:environment:bootstrap"]
 
 tags = {
   Environment = "prerequisite-aws"
