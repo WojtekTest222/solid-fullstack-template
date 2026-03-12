@@ -19,11 +19,6 @@ on:
             preset:
                 required: true
                 type: string
-        secrets:
-            GH_APP_ID:
-                required: true
-            GH_APP_PRIVATE_KEY:
-                required: true
 
 permissions:
     contents: write
@@ -32,6 +27,7 @@ permissions:
 jobs:
     bootstrap-gh-core:
         runs-on: ubuntu-latest
+        environment: bootstrap
 
         steps:
             - name: Guard template source repository
@@ -42,6 +38,9 @@ jobs:
                     echo "::error::This workflow is blocked on template source repository (KnightRadiants/solid-fullstack-template). Use a repository created from this template."
                     exit 1
                   fi
+
+            - name: Require repository admin access
+              uses: ./.github/actions/require-admin-access
 
             - name: Checkout
               uses: actions/checkout@v4
@@ -54,7 +53,7 @@ jobs:
               run: |
                   set -euo pipefail
                   if [[ -z "${GH_APP_ID}" || -z "${GH_APP_PRIVATE_KEY}" ]]; then
-                    echo "::error::Missing required secrets GH_APP_ID or GH_APP_PRIVATE_KEY."
+                    echo "::error::Missing required bootstrap environment secrets GH_APP_ID or GH_APP_PRIVATE_KEY."
                     exit 1
                   fi
 

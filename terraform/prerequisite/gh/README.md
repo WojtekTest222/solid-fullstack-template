@@ -20,7 +20,8 @@ Etap 0 sklada sie z trzech czesci:
    gh auth refresh -h github.com -s admin:org
    ```
    Skrypt sprobuje odpalic ten refresh automatycznie, jesli scope bedzie brakowal.
-   Przy ownerze typu `User` skrypt przechodzi na repo-level secrets i pomija bootstrap teamu.
+   Skrypt zapisuje bootstrapowe sekrety na repo environment `bootstrap`.
+   Przy ownerze typu `User` pomija bootstrap teamu.
 
 ## 2. Szybki start (zalecane)
 
@@ -38,12 +39,12 @@ python bootstrap-gh.py `
 Co zrobi orchestrator:
 1. Utworzy GitHub App (albo uzyje istniejacych credentials z `app/out`, ze wspoldzielonego cache na tym samym komputerze albo z AWS SSM Parameter Store, jesli juz sa).
 1. Zapewni team `administrators` i maintainera.
-1. Ustawi:
+1. Utworzy repo environment `bootstrap`, jesli jeszcze nie istnieje.
+1. Ustawi na environment `bootstrap`:
    - `GH_APP_ID` (secret)
    - `GH_APP_PRIVATE_KEY` (secret)
 
-Przy `--scope org` i ownerze typu `Organization` wartosci sa zapisywane jako org-level i ograniczone do `--bootstrap-repo` (`visibility=selected`).
-Przy ownerze typu `User` skrypt automatycznie wymusza repo-level secrets.
+Parametr `--scope` jest zachowany tylko dla kompatybilnosci CLI; bootstrapowe `GH_APP_*` sa zapisywane na repo environment `bootstrap`.
 Nazwa Appki jest domyslnie skladana wedlug konwencji `gha-<pierwsze-20-znakow-ownera>-<hash6>`.
 Ten schemat miesci sie w limicie GitHuba i jest stabilny dla danego ownera.
 Jesli pominiesz `--app-name`, skrypt najpierw pokaze Appki znalezione w `app/out` oraz we wspoldzielonym cache credentials dla danego ownera i pozwoli wybrac jedna strzalkami albo utworzyc nowa z domyslna nazwa wynikajaca z ownera.

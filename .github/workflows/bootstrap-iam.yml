@@ -24,6 +24,7 @@ permissions:
 jobs:
     bootstrap-iam:
         runs-on: ubuntu-latest
+        environment: bootstrap
 
         steps:
             - name: Guard template source repository
@@ -34,6 +35,9 @@ jobs:
                     echo "::error::This workflow is blocked on template source repository (KnightRadiants/solid-fullstack-template). Use a repository created from this template."
                     exit 1
                   fi
+
+            - name: Require repository admin access
+              uses: ./.github/actions/require-admin-access
 
             - name: Checkout
               uses: actions/checkout@v4
@@ -53,12 +57,12 @@ jobs:
 
                   AWS_REGION="${INPUT_AWS_REGION:-$VAR_AWS_REGION}"
                   if [[ -z "${AWS_REGION}" ]]; then
-                    echo "::error::AWS region is missing. Set workflow input aws_region or repository/org variable AWS_REGION."
+                    echo "::error::AWS region is missing. Set workflow input aws_region or bootstrap environment variable AWS_REGION."
                     exit 1
                   fi
 
                   if [[ -z "${VAR_TF_STATE_BUCKET}" ]]; then
-                    echo "::error::Missing variable TF_STATE_BUCKET."
+                    echo "::error::Missing bootstrap environment variable TF_STATE_BUCKET."
                     exit 1
                   fi
 
@@ -66,7 +70,7 @@ jobs:
                     ROLE_ARN="${VAR_AWS_ROLE_TO_ASSUME}"
                   else
                     if [[ -z "${VAR_AWS_ACCOUNT_ID}" || -z "${VAR_BOOTSTRAP_ROLE_NAME}" ]]; then
-                      echo "::error::Set AWS_ROLE_TO_ASSUME or both AWS_ACCOUNT_ID and BOOTSTRAP_ROLE_NAME."
+                      echo "::error::Set bootstrap environment variable AWS_ROLE_TO_ASSUME or both AWS_ACCOUNT_ID and BOOTSTRAP_ROLE_NAME."
                       exit 1
                     fi
                     ROLE_ARN="arn:aws:iam::${VAR_AWS_ACCOUNT_ID}:role/${VAR_BOOTSTRAP_ROLE_NAME}"

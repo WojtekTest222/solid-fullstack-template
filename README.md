@@ -18,6 +18,7 @@ Template do szybkiego startu aplikacji z bootstrapem AWS Organizations + IAM + g
 1. Jesli nie ustawiles ich przez `bootstrap-gh.py` albo `bootstrap.py`, ustaw GitHub Secrets (repo lub org):
    - `GH_APP_ID`
    - `GH_APP_PRIVATE_KEY`
+1. Zalecany kontrakt dla tego repo: trzymaj powyzsze wartosci na repo environment `bootstrap`.
 
 ## 2. Per nowe repo utworzone z template (zalecany flow)
 

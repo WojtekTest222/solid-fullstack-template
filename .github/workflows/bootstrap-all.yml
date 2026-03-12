@@ -59,6 +59,9 @@ jobs:
                     exit 1
                   fi
 
+            - name: Require repository admin access
+              uses: ./.github/actions/require-admin-access
+
     bootstrap-org:
         needs: guard
         uses: ./.github/workflows/bootstrap-org.yml
@@ -70,7 +73,6 @@ jobs:
             debug_confirmation: ${{ inputs.bootstrap_mode == 'debug' && 'YES' || 'NO' }}
             preset: ${{ inputs.preset }}
             aws_region: ${{ inputs.aws_region }}
-        secrets: inherit
 
     bootstrap-iam:
         needs: bootstrap-org
@@ -78,14 +80,12 @@ jobs:
         with:
             app_slug: ${{ inputs.app_slug }}
             aws_region: ${{ inputs.aws_region }}
-        secrets: inherit
 
     bootstrap-gh-core:
         needs: bootstrap-iam
         uses: ./.github/workflows/bootstrap-gh-core.yml
         with:
             preset: ${{ inputs.preset }}
-        secrets: inherit
 
     bootstrap-gh-bind:
         needs: bootstrap-gh-core
@@ -93,4 +93,3 @@ jobs:
         with:
             app_slug: ${{ inputs.app_slug }}
             aws_region: ${{ inputs.aws_region }}
-        secrets: inherit

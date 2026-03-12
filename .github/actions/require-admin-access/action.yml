@@ -1,0 +1,42 @@
+name: require-admin-access
+description: Fail the workflow unless the triggering users have admin access to the current repository.
+
+runs:
+  using: composite
+  steps:
+    - name: Require repository admin access
+      uses: actions/github-script@v7
+      env:
+        GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      with:
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const actors = [...new Set([context.actor, process.env.GITHUB_TRIGGERING_ACTOR].filter(Boolean))];
+          const checked = [];
+
+          for (const actor of actors) {
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: actor,
+              });
+              const permission = String(data.permission || "").toLowerCase();
+              checked.push(`${actor}:${permission || "unknown"}`);
+
+              if (permission !== "admin") {
+                core.setFailed(
+                  `Workflow '${context.workflow}' requires repository admin access. Actor '${actor}' has permission '${permission || "unknown"}'.`
+                );
+                return;
+              }
+            } catch (error) {
+              core.setFailed(
+                `Workflow '${context.workflow}' requires repository admin access and could not verify actor '${actor}': ${error.message}`
+              );
+              return;
+            }
+          }
+
+          core.notice(`Admin access check passed for ${checked.join(", ")}.`);

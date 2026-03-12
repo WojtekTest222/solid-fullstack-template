@@ -31,9 +31,9 @@ python bootstrap-aws.py `
 ```
 
 Jesli nie ustawisz `AWS_PROFILE` i nie podasz `--aws-profile`, skrypt wyswietli profile znalezione w `~/.aws` i poprosi o wybor strzalkami.
-Przy ownerze typu `Organization` do ustawiania org-level GitHub Variables potrzebny jest `gh` z zakresem `admin:org`.
+Przy ownerze typu `Organization` do dodatkowych operacji organizacyjnych potrzebny jest `gh` z zakresem `admin:org`.
 Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.
-Przy ownerze typu `User` skrypt zapisuje te wartosci jako repo-level Variables dla `--repo`.
+Skrypt tworzy repo environment `bootstrap` i zapisuje te wartosci jako environment-level Variables dla `--repo`.
 Skrypt najpierw sprawdza stan trzech zasobow bootstrapowych:
 - S3 bucket
 - DynamoDB table
@@ -46,7 +46,8 @@ Co zrobi skrypt:
 1. Sprawdzi, czy wymagane zasoby bootstrapowe juz istnieja na koncie.
 1. Wykona `terraform init` i `terraform apply` tylko wtedy, gdy nie istnieje zaden z nich.
 1. Odczyta output `tf_state_bucket`.
-1. Ustawi GitHub Variables dla wskazanego repo:
+1. Utworzy repo environment `bootstrap`, jesli jeszcze nie istnieje.
+1. Ustawi GitHub Variables na environment `bootstrap` dla wskazanego repo:
    - `AWS_REGION`
    - `AWS_ACCOUNT_ID`
    - `BOOTSTRAP_ROLE_NAME`

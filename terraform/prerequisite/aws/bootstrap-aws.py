@@ -24,6 +24,7 @@ from urllib.parse import unquote
 
 DEFAULT_BOOTSTRAP_ROLE_NAME = "gha-bootstrap-org"
 DEFAULT_LOCK_TABLE_NAME = "terraform-locks"
+BOOTSTRAP_ENVIRONMENT_NAME = "bootstrap"
 GH_WRITE_MAX_ATTEMPTS = 4
 GH_AUTH_REFRESH_MAX_ATTEMPTS = 3
 GH_AUTH_REFRESH_RETRY_DELAY_SECONDS = 3
@@ -382,8 +383,23 @@ def resolve_github_owner_type(owner: str) -> str:
     if owner_type not in {"Organization", "User"}:
         raise RuntimeError(
             f"Unsupported GitHub owner type '{owner_type}' for '{owner}'. Expected 'Organization' or 'User'."
-        )
+    )
     return owner_type
+
+
+def ensure_bootstrap_environment(*, owner: str, repo: str) -> None:
+    run_command_checked(
+        [
+            "gh",
+            "api",
+            "--method",
+            "PUT",
+            f"/repos/{owner}/{repo}/environments/{BOOTSTRAP_ENVIRONMENT_NAME}",
+        ],
+        description=(
+            f"Ensuring GitHub environment '{BOOTSTRAP_ENVIRONMENT_NAME}' exists for repo '{owner}/{repo}'..."
+        ),
+    )
 
 
 def prompt_for_aws_profile(profiles: list[str]) -> str:
@@ -442,8 +458,7 @@ def verify_cli_prerequisites(*, aws_profile: str, owner_type: str) -> None:
 
     get_gh_auth_status_text()
     print_step(
-        "GitHub owner is a personal account. Repository-level Actions variables will be used; "
-        "admin:org scope is not required."
+        "GitHub owner is a personal account. Bootstrap environment variables will be used; admin:org scope is not required."
     )
 
 
@@ -760,17 +775,25 @@ def get_aws_account_id() -> str:
     ).strip()
 
 
-def set_variable(name: str, value: str, *, owner: str, repo: str, owner_type: str) -> None:
-    command = ["gh", "variable", "set", name, "--body", value]
-    if owner_type == "Organization":
-        command.extend(["--org", owner, "--visibility", "selected", "--repos", repo])
-        description = f"Setting GitHub org variable '{name}' for repo '{owner}/{repo}'..."
-    else:
-        command.extend(["--repo", f"{owner}/{repo}"])
-        description = f"Setting GitHub repo variable '{name}' for repo '{owner}/{repo}'..."
+def set_variable(name: str, value: str, *, owner: str, repo: str) -> None:
+    command = [
+        "gh",
+        "variable",
+        "set",
+        name,
+        "--body",
+        value,
+        "--env",
+        BOOTSTRAP_ENVIRONMENT_NAME,
+        "--repo",
+        f"{owner}/{repo}",
+    ]
     run_command_checked_with_retry(
         command,
-        description=description,
+        description=(
+            f"Setting GitHub environment variable '{name}' for environment "
+            f"'{BOOTSTRAP_ENVIRONMENT_NAME}' in repo '{owner}/{repo}'..."
+        ),
     )
 
 
@@ -778,7 +801,6 @@ def upsert_github_variables(
     *,
     owner: str,
     repo: str,
-    owner_type: str,
     aws_region: str,
     aws_account_id: str,
     tf_state_bucket: str,
@@ -792,7 +814,7 @@ def upsert_github_variables(
     }
 
     for name, value in variables.items():
-        set_variable(name, value, owner=owner, repo=repo, owner_type=owner_type)
+        set_variable(name, value, owner=owner, repo=repo)
         changes.append(f"variable {name}")
 
     return changes
@@ -817,6 +839,7 @@ def main() -> int:
     missing_resources = [name for name, exists in resource_state.items() if not exists]
     bootstrap_mode = ""
     bootstrap_changes: list[str] = []
+    ensure_bootstrap_environment(owner=args.org, repo=args.repo)
 
     base_dir = Path(__file__).resolve().parent
     if len(existing_resources) == len(resource_state):
@@ -854,7 +877,6 @@ def main() -> int:
     variable_changes = upsert_github_variables(
         owner=args.org,
         repo=args.repo,
-        owner_type=owner_type,
         aws_region=args.aws_region,
         aws_account_id=aws_account_id,
         tf_state_bucket=tf_state_bucket,
@@ -864,6 +886,7 @@ def main() -> int:
     print(f"- owner: {args.org}")
     print(f"- owner_type: {owner_type}")
     print(f"- repo: {args.repo}")
+    print(f"- bootstrap_environment: {BOOTSTRAP_ENVIRONMENT_NAME}")
     print(f"- aws_region: {args.aws_region}")
     print(f"- aws_profile: {aws_profile}")
     print(f"- bootstrap_mode: {bootstrap_mode}")

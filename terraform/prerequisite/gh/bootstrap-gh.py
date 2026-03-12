@@ -27,6 +27,7 @@ DEFAULT_APP_PREFIX = "gha"
 MAX_GITHUB_APP_NAME_LENGTH = 34
 DEFAULT_ORG_SEGMENT_LENGTH = 20
 DEFAULT_APP_SUFFIX_LENGTH = 6
+BOOTSTRAP_ENVIRONMENT_NAME = "bootstrap"
 GH_WRITE_MAX_ATTEMPTS = 4
 GH_AUTH_REFRESH_MAX_ATTEMPTS = 3
 GH_AUTH_REFRESH_RETRY_DELAY_SECONDS = 3
@@ -337,7 +338,7 @@ def parse_args() -> argparse.Namespace:
         "--scope",
         choices=["org", "repo"],
         default="org",
-        help="Where to write GH_APP_* secrets",
+        help="Deprecated. GH_APP_* bootstrap secrets are always written to repository environment 'bootstrap'.",
     )
     parser.add_argument(
         "--app-name",
@@ -466,8 +467,23 @@ def resolve_github_owner_type(owner: str) -> str:
     if owner_type not in {"Organization", "User"}:
         raise RuntimeError(
             f"Unsupported GitHub owner type '{owner_type}' for '{owner}'. Expected 'Organization' or 'User'."
-        )
+    )
     return owner_type
+
+
+def ensure_bootstrap_environment(*, owner: str, repo: str) -> None:
+    run_command_checked(
+        [
+            "gh",
+            "api",
+            "--method",
+            "PUT",
+            f"/repos/{owner}/{repo}/environments/{BOOTSTRAP_ENVIRONMENT_NAME}",
+        ],
+        description=(
+            f"Ensuring GitHub environment '{BOOTSTRAP_ENVIRONMENT_NAME}' exists for repo '{owner}/{repo}'..."
+        ),
+    )
 
 
 def collect_credentials_bundles(search_dirs: list[Path]) -> list[tuple[float, Path, Path, dict]]:
@@ -1190,12 +1206,28 @@ def ensure_team(
 
 
 def set_secret(name: str, value: str, *, scope: str, org: str, repo: str, owner_type: str) -> None:
-    command = ["gh", "secret", "set", name, "--body", value]
-    if scope == "repo" or owner_type == "User":
-        command.extend(["--repo", f"{org}/{repo}"])
-    else:
-        command.extend(["--org", org, "--visibility", "selected", "--repos", repo])
-    run_command_checked_with_retry(command, description=f"Setting GitHub secret '{name}'...")
+    del scope
+    del owner_type
+
+    command = [
+        "gh",
+        "secret",
+        "set",
+        name,
+        "--body",
+        value,
+        "--env",
+        BOOTSTRAP_ENVIRONMENT_NAME,
+        "--repo",
+        f"{org}/{repo}",
+    ]
+    run_command_checked_with_retry(
+        command,
+        description=(
+            f"Setting GitHub environment secret '{name}' for environment "
+            f"'{BOOTSTRAP_ENVIRONMENT_NAME}' in repo '{org}/{repo}'..."
+        ),
+    )
 
 
 def upsert_bootstrap_secrets(
@@ -1226,7 +1258,7 @@ def verify_cli_prerequisites(*, owner_type: str) -> None:
 
     get_gh_auth_status_text()
     print_step(
-        "GitHub owner is a personal account. Repository-level secrets will be used and team bootstrap will be skipped."
+        "GitHub owner is a personal account. Bootstrap environment secrets will be used and team bootstrap will be skipped."
     )
 
 
@@ -1236,9 +1268,11 @@ def main() -> int:
     owner_type = resolve_github_owner_type(args.org)
     print_step(f"Detected GitHub owner type '{owner_type}' for '{args.org}'.")
     verify_cli_prerequisites(owner_type=owner_type)
-    if owner_type == "User" and args.scope != "repo":
-        print_step("GitHub owner is a personal account. Forcing GitHub App secrets scope to 'repo'.")
-        args.scope = "repo"
+    ensure_bootstrap_environment(owner=args.org, repo=args.bootstrap_repo)
+    if args.scope != "org":
+        print_step(
+            f"Ignoring --scope={args.scope}. Bootstrap GitHub App secrets are always stored in environment '{BOOTSTRAP_ENVIRONMENT_NAME}'."
+        )
     aws_region = resolve_aws_region(args.aws_region)
     aws_profile = args.aws_profile.strip() or os.environ.get("AWS_PROFILE", "").strip()
 
@@ -1348,7 +1382,8 @@ def main() -> int:
     print(f"- owner: {args.org}")
     print(f"- owner_type: {owner_type}")
     print(f"- bootstrap_repo: {args.bootstrap_repo}")
-    print(f"- scope: {args.scope}")
+    print(f"- bootstrap_environment: {BOOTSTRAP_ENVIRONMENT_NAME}")
+    print(f"- scope: environment/{BOOTSTRAP_ENVIRONMENT_NAME}")
     print(f"- app_id: {app_id}")
     print(f"- app_credentials: {credentials_file}")
     print(f"- app_private_key: {private_key_file}")

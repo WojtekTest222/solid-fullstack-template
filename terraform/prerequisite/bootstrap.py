@@ -140,7 +140,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--aws-region", default="", help="AWS region for prerequisite resources")
     parser.add_argument("--aws-profile", default="", help="AWS profile to use")
 
-    parser.add_argument("--scope", choices=["org", "repo"], default="org", help="Where to write GH_APP_* secrets")
+    parser.add_argument(
+        "--scope",
+        choices=["org", "repo"],
+        default="org",
+        help="Deprecated. GH_APP_* bootstrap secrets are always written to repository environment 'bootstrap'.",
+    )
     parser.add_argument(
         "--app-name",
         default="",

@@ -38,8 +38,10 @@ Po wybraniu albo utworzeniu Appki wykonuje upsert jej `app_id` i `private_key_pe
 Jesli Appka nie jest jeszcze zainstalowana u ownera albo instalacja uzywa `selected repositories`, skrypt poda odpowiedni link, moze otworzyc przegladarke i poprosi o potwierdzenie konfiguracji dla bootstrapowanego repo.
 W trybie nieinteraktywnym skrypt moze automatycznie zre-uzyc konwencyjna Appke albo jednoznacznie jedyny znaleziony bundle credentials z tych lokalizacji.
 Przegladarka dla GitHub App manifest flow otwiera sie automatycznie. Jesli chcesz to wylaczyc, uzyj `--no-open-browser`.
-Przy ownerze typu `Organization` do org-level variables/secrets/team management potrzebny jest `gh` z zakresem `admin:org`.
+Przy ownerze typu `Organization` do team management potrzebny jest `gh` z zakresem `admin:org`.
 Jesli go brakuje, skrypt sprobuje uruchomic `gh auth refresh -h github.com -s admin:org`.
-Przy ownerze typu `User` skrypt przechodzi na repo-level variables/secrets i pomija bootstrap teamu `administrators`.
+Prerequisite bootstrap tworzy w biezacym repo environment `bootstrap` i zapisuje tam wszystkie bootstrapowe Variables oraz Secrets wymagane przez `bootstrap-all`.
+Przy ownerze typu `User` skrypt dalej pomija bootstrap teamu `administrators`.
+Workflowy `bootstrap-all` i ich subworkflowy sa dodatkowo blokowane dla osob bez `admin` access do repo.
 
 Po wykonaniu prerequisite uruchamiasz `bootstrap-all`.

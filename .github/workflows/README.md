@@ -20,6 +20,8 @@ Uruchamiasz jeden workflow `workflow_dispatch`, a on wykonuje pelny lancuch:
 
 ### Wymagane Variables
 
+Wszystkie ponizsze Variables powinny byc zapisane na repo environment `bootstrap`.
+
 - `AWS_REGION`
 - `AWS_ACCOUNT_ID`
 - `BOOTSTRAP_ROLE_NAME`
@@ -29,8 +31,15 @@ Alternatywnie zamiast `AWS_ACCOUNT_ID` + `BOOTSTRAP_ROLE_NAME` mozesz ustawic `A
 
 ### Wymagane Secrets
 
+Ponizsze Secrets powinny byc zapisane na repo environment `bootstrap`.
+
 - `GH_APP_ID`
 - `GH_APP_PRIVATE_KEY`
+
+### Dostep
+
+- `bootstrap-all` i bootstrapowe subworkflowy wymagaja `admin` access do repo.
+- Wszystkie joby bootstrapowe dzialaja na environment `bootstrap`, wiec tam trzymany jest caly kontrakt prerequisite dla tego repo.
 
 ## Manualny fallback
 
