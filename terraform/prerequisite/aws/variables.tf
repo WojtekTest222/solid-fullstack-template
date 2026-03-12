@@ -16,7 +16,7 @@ variable "github_org" {
 }
 
 variable "github_repo" {
-  description = "GitHub repository name used to scope the trust policy."
+  description = "GitHub repository name allowed to assume the bootstrap role from branch main."
   type        = string
 
   validation {
@@ -61,7 +61,7 @@ variable "github_oidc_audience" {
 }
 
 variable "github_subject_patterns" {
-  description = "Optional list of sub claim patterns allowed in trust policy. If empty, defaults to org or repo scope."
+  description = "Optional list of sub claim patterns allowed in trust policy. If empty, defaults to repo main branch."
   type        = list(string)
   default     = []
 

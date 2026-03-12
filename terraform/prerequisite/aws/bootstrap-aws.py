@@ -14,11 +14,13 @@ import argparse
 import configparser
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 DEFAULT_BOOTSTRAP_ROLE_NAME = "gha-bootstrap-org"
 DEFAULT_LOCK_TABLE_NAME = "terraform-locks"
@@ -133,6 +135,30 @@ def run_command_checked_with_retry(
 
 def build_tf_state_bucket_name(*, aws_account_id: str, aws_region: str) -> str:
     return f"tfstate-{aws_account_id}-{aws_region}"
+
+
+def build_github_main_subject(*, org: str, repo: str) -> str:
+    return f"repo:{org}/{repo}:ref:refs/heads/main"
+
+
+def normalize_github_subject_pattern(pattern: str) -> str:
+    normalized = pattern.strip()
+    legacy_repo_match = re.fullmatch(r"repo:([^/]+)/([^:]+):\*", normalized)
+    if not legacy_repo_match:
+        return normalized
+    return build_github_main_subject(org=legacy_repo_match.group(1), repo=legacy_repo_match.group(2))
+
+
+def dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
 
 
 def normalize_aws_cli_error(result: subprocess.CompletedProcess[str]) -> str:
@@ -479,6 +505,185 @@ def check_iam_role_exists(*, role_name: str) -> bool:
     return True
 
 
+def load_assume_role_policy_document(*, role_name: str) -> dict[str, object]:
+    output_raw = run_command_checked(
+        [
+            "aws",
+            "iam",
+            "get-role",
+            "--role-name",
+            role_name,
+            "--query",
+            "Role.AssumeRolePolicyDocument",
+            "--output",
+            "json",
+        ],
+        description=f"Reading IAM trust policy for role '{role_name}'...",
+    )
+
+    parsed_output = json.loads(output_raw)
+    if isinstance(parsed_output, dict):
+        return parsed_output
+    if not isinstance(parsed_output, str):
+        raise RuntimeError(f"Unsupported IAM trust policy payload type for role '{role_name}'.")
+
+    decoded_policy = unquote(parsed_output)
+    try:
+        policy_document = json.loads(decoded_policy)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse IAM trust policy for role '{role_name}'.") from exc
+
+    if not isinstance(policy_document, dict):
+        raise RuntimeError(f"Unexpected IAM trust policy shape for role '{role_name}'.")
+    return policy_document
+
+
+def list_policy_statements(policy_document: dict[str, object]) -> list[dict[str, object]]:
+    raw_statements = policy_document.get("Statement", [])
+    if isinstance(raw_statements, dict):
+        return [raw_statements]
+    if isinstance(raw_statements, list):
+        return [statement for statement in raw_statements if isinstance(statement, dict)]
+    raise RuntimeError("IAM trust policy does not contain a valid Statement list.")
+
+
+def is_github_oidc_statement(statement: dict[str, object]) -> bool:
+    raw_action = statement.get("Action", [])
+    if isinstance(raw_action, str):
+        actions = [raw_action]
+    elif isinstance(raw_action, list):
+        actions = [str(action).strip() for action in raw_action]
+    else:
+        return False
+
+    if "sts:AssumeRoleWithWebIdentity" not in actions:
+        return False
+
+    principal = statement.get("Principal", {})
+    if not isinstance(principal, dict):
+        return True
+
+    federated = principal.get("Federated", [])
+    if isinstance(federated, str):
+        federated_values = [federated]
+    elif isinstance(federated, list):
+        federated_values = [str(value).strip() for value in federated]
+    else:
+        federated_values = []
+
+    return not federated_values or any(
+        "token.actions.githubusercontent.com" in value for value in federated_values
+    )
+
+
+def extract_subject_patterns_from_statement(statement: dict[str, object]) -> list[str]:
+    condition = statement.get("Condition", {})
+    if not isinstance(condition, dict):
+        return []
+
+    patterns: list[str] = []
+    for operator_value in condition.values():
+        if not isinstance(operator_value, dict):
+            continue
+        raw_patterns = operator_value.get("token.actions.githubusercontent.com:sub")
+        if isinstance(raw_patterns, str):
+            patterns.append(raw_patterns)
+            continue
+        if isinstance(raw_patterns, list):
+            patterns.extend(str(value) for value in raw_patterns)
+    return dedupe_preserve_order(patterns)
+
+
+def update_subject_patterns_in_policy(
+    policy_document: dict[str, object],
+    *,
+    subject_patterns: list[str],
+) -> dict[str, object]:
+    updated = False
+
+    for statement in list_policy_statements(policy_document):
+        if not is_github_oidc_statement(statement):
+            continue
+
+        condition = statement.get("Condition")
+        if condition is None:
+            condition = {}
+            statement["Condition"] = condition
+        if not isinstance(condition, dict):
+            raise RuntimeError("IAM trust policy contains an invalid Condition block.")
+
+        for operator_name, operator_values in list(condition.items()):
+            if not isinstance(operator_values, dict):
+                continue
+            if operator_name == "StringLike":
+                continue
+            operator_values.pop("token.actions.githubusercontent.com:sub", None)
+
+        string_like = condition.get("StringLike")
+        if string_like is None:
+            string_like = {}
+            condition["StringLike"] = string_like
+        if not isinstance(string_like, dict):
+            raise RuntimeError("IAM trust policy contains an invalid StringLike block.")
+
+        string_like["token.actions.githubusercontent.com:sub"] = subject_patterns
+        updated = True
+
+    if not updated:
+        raise RuntimeError(
+            f"IAM role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' does not contain a GitHub OIDC web identity statement."
+        )
+
+    return policy_document
+
+
+def ensure_bootstrap_role_trust_policy(*, org: str, repo: str) -> bool:
+    policy_document = load_assume_role_policy_document(role_name=DEFAULT_BOOTSTRAP_ROLE_NAME)
+    current_subject_patterns: list[str] = []
+
+    for statement in list_policy_statements(policy_document):
+        if not is_github_oidc_statement(statement):
+            continue
+        current_subject_patterns.extend(extract_subject_patterns_from_statement(statement))
+
+    current_subject_patterns = dedupe_preserve_order(current_subject_patterns)
+    desired_subject_patterns = dedupe_preserve_order(
+        [normalize_github_subject_pattern(pattern) for pattern in current_subject_patterns]
+        + [build_github_main_subject(org=org, repo=repo)]
+    )
+
+    if (
+        len(current_subject_patterns) == len(desired_subject_patterns)
+        and set(current_subject_patterns) == set(desired_subject_patterns)
+    ):
+        print_step(
+            f"IAM role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' already allows the required GitHub repos from branch 'main'."
+        )
+        return False
+
+    updated_policy = update_subject_patterns_in_policy(
+        policy_document,
+        subject_patterns=desired_subject_patterns,
+    )
+    policy_document_json = json.dumps(updated_policy, separators=(",", ":"))
+    run_command_checked(
+        [
+            "aws",
+            "iam",
+            "update-assume-role-policy",
+            "--role-name",
+            DEFAULT_BOOTSTRAP_ROLE_NAME,
+            "--policy-document",
+            policy_document_json,
+        ],
+        description=(
+            f"Updating IAM trust policy for role '{DEFAULT_BOOTSTRAP_ROLE_NAME}' "
+            f"to allow repo '{org}/{repo}' from branch 'main'..."
+        ),
+    )
+    return True
+
+
 def inspect_existing_aws_prerequisites(*, aws_account_id: str, aws_region: str) -> tuple[str, dict[str, bool]]:
     tf_state_bucket = build_tf_state_bucket_name(aws_account_id=aws_account_id, aws_region=aws_region)
     print_step("Checking whether AWS prerequisite resources already exist on this account...")
@@ -588,6 +793,7 @@ def main() -> int:
     existing_resources = [name for name, exists in resource_state.items() if exists]
     missing_resources = [name for name, exists in resource_state.items() if not exists]
     bootstrap_mode = ""
+    bootstrap_changes: list[str] = []
 
     base_dir = Path(__file__).resolve().parent
     if len(existing_resources) == len(resource_state):
@@ -595,6 +801,8 @@ def main() -> int:
         print(green("[OK] All required AWS prerequisite resources already exist. Skipping Terraform apply."))
         for resource_name in existing_resources:
             print(green(f"  - {resource_name}"))
+        if ensure_bootstrap_role_trust_policy(org=args.org, repo=args.repo):
+            bootstrap_changes.append(f"IAM trust policy for role {DEFAULT_BOOTSTRAP_ROLE_NAME}")
     elif len(existing_resources) == 0:
         bootstrap_mode = "created"
         tfvars_path = write_runtime_tfvars(org=args.org, repo=args.repo, aws_region=args.aws_region)
@@ -620,7 +828,7 @@ def main() -> int:
             f"Missing: {missing_text}"
         )
 
-    changes = upsert_github_variables(
+    variable_changes = upsert_github_variables(
         org=args.org,
         repo=args.repo,
         aws_region=args.aws_region,
@@ -638,7 +846,7 @@ def main() -> int:
     print(f"- bootstrap_role_name: {DEFAULT_BOOTSTRAP_ROLE_NAME}")
     print(f"- tf_state_bucket: {tf_state_bucket}")
     print(f"- tf_lock_table: {DEFAULT_LOCK_TABLE_NAME}")
-    for change in changes:
+    for change in bootstrap_changes + variable_changes:
         print(f"- upsert {change}")
 
     print("\nDone.")
